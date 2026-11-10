@@ -16,6 +16,7 @@ use comp_core::comp::{self, CompSpec, Event, FramePick, SelectOptions, SourceSpe
 use comp_core::convert::{self, ConvertOptions};
 use comp_core::filter::{FieldMode, FieldOptions, FieldOrder};
 use comp_core::pairing;
+use comp_core::viewer;
 use comp_core::project::{FrameTypeRule, Project, ProjectSource, Rules};
 use comp_core::source::{OpenOptions, VideoSource};
 
@@ -103,6 +104,12 @@ enum Cmd {
         /// Turn off all rejection rules, including black screens and scene changes.
         #[arg(long)]
         no_reject: bool,
+        /// Open the HTML viewer in your browser when done.
+        #[arg(long)]
+        open: bool,
+        /// Open the output folder and slow.pics' upload page, for a manual drag-and-drop upload.
+        #[arg(long)]
+        open_slowpics: bool,
         /// Save these settings as a TOML project file (then run as usual).
         #[arg(long)]
         save_project: Option<PathBuf>,
@@ -252,7 +259,7 @@ fn main() -> Result<()> {
             let ivtc = field(|s| &s.ivtc);
             let deint = field(|s| &s.deint);
             let matrices = p.sources.iter().filter_map(|s| s.matrix.clone().map(|m| (s.label.clone(), m))).collect();
-            run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, select)?;
+            run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, select, false, false)?;
         }
         Cmd::Pair { sources } => {
             let lists: Vec<Vec<PathBuf>> =
@@ -294,6 +301,8 @@ fn main() -> Result<()> {
             dark,
             no_reject,
             save_project,
+            open,
+            open_slowpics,
             matrices,
             name,
             out,
@@ -362,7 +371,7 @@ fn main() -> Result<()> {
                 project.save(file)?;
                 eprintln!("saved project to {}", file.display());
             }
-            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar, select)?;
+            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar, select, open, open_slowpics)?;
         }
     }
     Ok(())
@@ -382,6 +391,8 @@ fn run_comp(
     out: PathBuf,
     no_sar: bool,
     select: SelectOptions,
+    open: bool,
+    open_slowpics: bool,
 ) -> Result<()> {
     let mut specs: Vec<SourceSpec> = sources.iter().map(|(l, p)| SourceSpec::new(l, p)).collect();
     let find = |specs: &mut Vec<SourceSpec>, label: &str| -> Result<usize> {
@@ -458,7 +469,9 @@ fn run_comp(
         for (i, s) in spec.sources.iter_mut().enumerate() {
             s.path = lists[i][0].clone();
         }
-        return run_one(&spec);
+        let res = run_one(&spec)?;
+        after_run(&res.out_dir, open, open_slowpics);
+        return Ok(());
     }
 
     // Season mode: print the pairing table, then run every complete episode.
@@ -480,6 +493,7 @@ fn run_comp(
     let base_dir = spec.out_dir.clone();
     let base_name = spec.name.clone();
     let mut failed = Vec::new();
+    let mut entries = Vec::new();
     for row in rows {
         let ep = row.episode.to_string();
         println!("\n=== {ep} ===");
@@ -488,16 +502,34 @@ fn run_comp(
         }
         spec.name = format!("{base_name} - {ep}");
         spec.out_dir = base_dir.join(&ep);
-        if let Err(e) = run_one(&spec) {
-            eprintln!("error in {ep}: {e:#}");
-            failed.push(ep);
+        match run_one(&spec) {
+            Ok(res) => entries.push(viewer::SeasonEntry {
+                thumb: res.sources[0].shots.first().map(|s| format!("{ep}/{}", s.file)),
+                dir: ep.clone(),
+                frames: res.frames.len(),
+                episode: ep,
+            }),
+            Err(e) => {
+                eprintln!("error in {ep}: {e:#}");
+                failed.push(ep);
+            }
+        }
+    }
+    if !entries.is_empty() {
+        let idx = viewer::write_season_index(&base_dir, &base_name, &entries)?;
+        println!("\nseason index: {}", idx.display());
+        if open {
+            open_external(&idx.to_string_lossy());
+        }
+        if open_slowpics {
+            after_run(&base_dir, false, true);
         }
     }
     anyhow::ensure!(failed.is_empty(), "failed episodes: {}", failed.join(", "));
     Ok(())
 }
 
-fn run_one(spec: &CompSpec) -> Result<()> {
+fn run_one(spec: &CompSpec) -> Result<comp::CompResult> {
     let labels: Vec<String> = spec.sources.iter().map(|s| s.label.clone()).collect();
     let total_shots = Mutex::new((0usize, 0usize));
     let last_pct: Mutex<HashMap<usize, i64>> = Mutex::new(HashMap::new());
@@ -584,6 +616,35 @@ fn run_one(spec: &CompSpec) -> Result<()> {
             s.shots.first().map(|x| x.height).unwrap_or(0)
         );
     }
+    println!("viewer: {}", res.out_dir.join("index.html").display());
     println!("done in {:.1}s", started.elapsed().as_secs_f64());
-    Ok(())
+    Ok(res)
+}
+
+/// Opens a file, folder or URL with the OS default handler.
+fn open_external(target: &str) {
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(target).status();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("cmd").args(["/C", "start", "", target]).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(target).status();
+    if let Err(e) = r {
+        eprintln!("couldn't open {target}: {e}");
+    }
+}
+
+/// After a run: open the viewer, and/or the folder plus slow.pics' upload page for a manual upload.
+fn after_run(dir: &Path, open: bool, open_slowpics: bool) {
+    if open {
+        open_external(&dir.join("index.html").to_string_lossy());
+    }
+    if open_slowpics {
+        open_external(&dir.to_string_lossy());
+        open_external("https://slow.pics/comparison");
+        println!(
+            "Drag the PNGs from {} into the slow.pics page. Names sort frame by frame, sources in -s order.",
+            dir.display()
+        );
+    }
 }

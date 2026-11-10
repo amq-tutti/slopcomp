@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  --bg: #f4f4f2; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #dcdcd8;
+  --accent: #2563eb; --accent-text: #ffffff; --stage: #e9e9e6; --chip: #ececea;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121214; --panel: #1b1b1e; --text: #ececf0; --muted: #9a9aa2; --line: #2c2c31;
+    --accent: #4f8cff; --accent-text: #0b0b0c; --stage: #0b0b0c; --chip: #26262b; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+body { display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 40vw; }
+.group { display: flex; gap: 4px; align-items: center; }
+.group label { color: var(--muted); font-size: 12px; margin-right: 2px; }
+button, select { font: inherit; color: var(--text); background: var(--chip); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.spacer { flex: 1; }
+.info { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+main { position: relative; overflow: hidden; background: var(--stage); }
+.grid { position: absolute; inset: 0; display: grid; gap: 4px; padding: 4px; }
+.panel { position: relative; overflow: hidden; background: #000; cursor: grab; }
+.panel.dragging { cursor: grabbing; }
+.panel .layer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-origin: 0 0; }
+.panel img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; user-select: none;
+  -webkit-user-drag: none; }
+.panel.pixelated img { image-rendering: pixelated; }
+.tag { position: absolute; left: 8px; top: 8px; z-index: 3; background: rgba(0,0,0,.65); color: #fff;
+  padding: 3px 8px; border-radius: 5px; font-size: 12px; pointer-events: none; font-variant-numeric: tabular-nums; }
+.tag.right { left: auto; right: 8px; }
+.divider { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; z-index: 2;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.4); pointer-events: none; }
+footer { background: var(--panel); border-top: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
+.strip { display: flex; gap: 6px; padding: 8px 12px; }
+.thumb { flex: none; width: 128px; border: 2px solid transparent; border-radius: 6px; overflow: hidden;
+  cursor: pointer; background: #000; position: relative; padding: 0; }
+.thumb img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.thumb span { position: absolute; right: 4px; bottom: 3px; font-size: 11px; color: #fff;
+  background: rgba(0,0,0,.6); padding: 0 4px; border-radius: 3px; }
+.thumb[aria-current="true"] { border-color: var(--accent); }
+.help { position: absolute; right: 16px; bottom: 16px; z-index: 5; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; font-size: 13px; max-width: 340px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+.help[hidden] { display: none; }
+.help kbd { background: var(--chip); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, monospace; }
+.help table { border-collapse: collapse; }
+.help td { padding: 2px 8px 2px 0; vertical-align: top; }
+@media (max-width: 640px) {
+  header { padding: 8px 16px; }
+  header h1 { max-width: 100%; flex-basis: 100%; }
+  .thumb { width: 96px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <div class="group" role="group" aria-label="View mode">
+    <button data-mode="grid">Side by side</button>
+    <button data-mode="slider">Slider</button>
+    <button data-mode="flicker">Flicker</button>
+  </div>
+  <div class="group" id="srcButtons" role="group" aria-label="Sources"></div>
+  <div class="group" id="sliderPick" hidden>
+    <label for="selA">Left</label><select id="selA"></select>
+    <label for="selB">Right</label><select id="selB"></select>
+  </div>
+  <div class="group">
+    <button id="fit" title="Fit (0)">Fit</button>
+    <button id="native" title="1:1 pixels of the first source (N)">1:1</button>
+    <span class="info" id="zoomInfo"></span>
+  </div>
+  <div class="spacer"></div>
+  <span class="info" id="frameInfo"></span>
+  <button id="helpBtn" aria-expanded="false" title="Keyboard shortcuts (?)">?</button>
+</header>
+<main id="stage">
+  <div class="help" id="help" hidden>
+    <table>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>previous / next frame</td></tr>
+      <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>show source N (flicker), or set the right side (slider)</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>next source (flicker)</td></tr>
+      <tr><td><kbd>G</kbd> <kbd>S</kbd> <kbd>F</kbd></td><td>side by side / slider / flicker</td></tr>
+      <tr><td>wheel, <kbd>+</kbd> <kbd>−</kbd></td><td>zoom (all panels stay in sync)</td></tr>
+      <tr><td>drag</td><td>pan (in slider mode: move the divider)</td></tr>
+      <tr><td><kbd>0</kbd> / <kbd>N</kbd></td><td>fit / 1:1 pixels</td></tr>
+    </table>
+  </div>
+</main>
+<footer><div class="strip" id="strip"></div></footer>
+
+<script>
+const DATA = __DATA__;
+
+const $ = (id) => document.getElementById(id);
+const sources = DATA.sources;
+const frames = DATA.frames;
+const state = {
+  frame: 0, mode: "grid", flick: 0, a: 0, b: Math.min(1, sources.length - 1),
+  scale: 1, tx: 0, ty: 0, split: 0.5,
+};
+try {
+  const saved = JSON.parse(localStorage.getItem("comp-viewer") || "{}");
+  if (["grid", "slider", "flicker"].includes(saved.mode)) state.mode = saved.mode;
+} catch (e) {}
+
+$("title").textContent = DATA.name;
+document.title = DATA.name;
+
+// Source buttons and slider selects.
+sources.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.textContent = `${i + 1} ${s.label}`;
+  b.addEventListener("click", () => { if (state.mode === "slider") state.b = i; state.flick = i; render(); });
+  $("srcButtons").appendChild(b);
+  for (const sel of [$("selA"), $("selB")]) {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = s.label;
+    sel.appendChild(o);
+  }
+});
+$("selA").addEventListener("change", (e) => { state.a = +e.target.value; render(); });
+$("selB").addEventListener("change", (e) => { state.b = +e.target.value; render(); });
+
+// Frame strip (reference thumbnails, lazy-loaded).
+frames.forEach((f, k) => {
+  const t = document.createElement("button");
+  t.className = "thumb";
+  t.innerHTML = `<img loading="lazy" alt=""><span>${f}</span>`;
+  t.querySelector("img").src = sources[0].shots[k].file;
+  t.addEventListener("click", () => { state.frame = k; render(); });
+  $("strip").appendChild(t);
+});
+
+document.querySelectorAll("[data-mode]").forEach((b) =>
+  b.addEventListener("click", () => setMode(b.dataset.mode)));
+function setMode(m) {
+  state.mode = m;
+  try { localStorage.setItem("comp-viewer", JSON.stringify({ mode: m })); } catch (e) {}
+  render();
+}
+
+const fmtTime = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(3).padStart(6, "0")}`;
+function shotLabel(i) {
+  const s = sources[i], sh = s.shots[state.frame];
+  return `${s.label} · #${sh.source_frame} · ${sh.pict_type} · ${sh.width}×${sh.height}`;
+}
+
+// ---- Stage rendering ----------------------------------------------------------------------
+let panels = [];
+function makePanel(imgs, tags) {
+  const p = document.createElement("div");
+  p.className = "panel";
+  const layer = document.createElement("div");
+  layer.className = "layer";
+  imgs.forEach((src) => { const im = new Image(); im.src = src; im.draggable = false; layer.appendChild(im); });
+  p.appendChild(layer);
+  tags.forEach(([text, right]) => {
+    const t = document.createElement("div");
+    t.className = "tag" + (right ? " right" : "");
+    t.textContent = text;
+    p.appendChild(t);
+  });
+  attachPanZoom(p);
+  return p;
+}
+
+function render() {
+  const k = state.frame;
+  document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.mode === state.mode));
+  [...$("srcButtons").children].forEach((b, i) => b.setAttribute("aria-pressed",
+    state.mode === "flicker" ? i === state.flick : state.mode === "slider" ? i === state.b : "false"));
+  $("srcButtons").hidden = state.mode === "grid";
+  $("sliderPick").hidden = state.mode !== "slider";
+  $("selA").value = state.a; $("selB").value = state.b;
+  [...$("strip").children].forEach((t, i) => t.setAttribute("aria-current", i === k));
+  $("strip").children[k]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const ref = sources[0].shots[k];
+  $("frameInfo").textContent = `frame ${k + 1}/${frames.length} · ref #${frames[k]} · ${fmtTime(ref.reference_time)}`;
+
+  const stage = $("stage");
+  stage.querySelectorAll(".grid").forEach((g) => g.remove());
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  panels = [];
+  if (state.mode === "grid") {
+    const n = sources.length;
+    const w = stage.clientWidth, h = stage.clientHeight;
+    const ar = ref.width / ref.height;
+    // Choose the column count that gives the largest panels.
+    let best = 1, bestArea = 0;
+    for (let c = 1; c <= n; c++) {
+      const r = Math.ceil(n / c);
+      const pw = Math.min(w / c, (h / r) * ar);
+      if (pw > bestArea) { bestArea = pw; best = c; }
+    }
+    grid.style.gridTemplateColumns = `repeat(${best}, 1fr)`;
+    grid.style.gridTemplateRows = `repeat(${Math.ceil(n / best)}, 1fr)`;
+    sources.forEach((s, i) => { const p = makePanel([s.shots[k].file], [[shotLabel(i)]]); grid.appendChild(p); panels.push(p); });
+  } else if (state.mode === "flicker") {
+    const p = makePanel([sources[state.flick].shots[k].file], [[shotLabel(state.flick)]]);
+    grid.appendChild(p); panels.push(p);
+    // Preload the other sources so flicking is instant.
+    sources.forEach((s) => { new Image().src = s.shots[k].file; });
+  } else {
+    const p = makePanel([sources[state.a].shots[k].file, sources[state.b].shots[k].file],
+      [[shotLabel(state.a)], [shotLabel(state.b), true]]);
+    const div = document.createElement("div");
+    div.className = "divider";
+    p.appendChild(div);
+    grid.appendChild(p); panels.push(p);
+  }
+  stage.appendChild(grid);
+  applyTransform();
+  // Preload neighbouring frames.
+  for (const kk of [k - 1, k + 1]) if (kk >= 0 && kk < frames.length) sources.forEach((s) => { new Image().src = s.shots[kk].file; });
+}
+
+// ---- Synced zoom / pan (normalised to panel size) ---------------------------------------
+function applyTransform() {
+  for (const p of panels) {
+    const w = p.clientWidth, h = p.clientHeight;
+    const layer = p.querySelector(".layer");
+    layer.style.transform = `translate(${state.tx * w}px, ${state.ty * h}px) scale(${state.scale})`;
+    p.classList.toggle("pixelated", displayScale(p) >= 1.5);
+    if (state.mode === "slider") {
+      const x = state.split * w;
+      const [, top] = layer.querySelectorAll("img");
+      // Clip in the layer's (zoomed) coordinate space so the divider stays put on screen.
+      const lx = (x - state.tx * w) / state.scale;
+      top.style.clipPath = `inset(0 0 0 ${Math.max(0, lx)}px)`;
+      p.querySelector(".divider").style.left = `${x - 1}px`;
+    }
+  }
+  const p0 = panels[0];
+  $("zoomInfo").textContent = p0 ? `${Math.round(displayScale(p0) * 100)}%` : "";
+}
+// Screen pixels per source pixel for the first source in this panel.
+function displayScale(p) {
+  const sh = sources[0].shots[state.frame];
+  const fit = Math.min(p.clientWidth / sh.width, p.clientHeight / sh.height);
+  return fit * state.scale;
+}
+function zoomAt(p, factor, cx, cy) {
+  const w = p.clientWidth, h = p.clientHeight;
+  const u = cx / w, v = cy / h;
+  const s2 = Math.min(64, Math.max(1, state.scale * factor));
+  const f = s2 / state.scale;
+  state.tx = u - (u - state.tx) * f;
+  state.ty = v - (v - state.ty) * f;
+  state.scale = s2;
+  clampPan();
+  applyTransform();
+}
+function clampPan() {
+  const s = state.scale;
+  state.tx = Math.min(0, Math.max(1 - s, state.tx));
+  state.ty = Math.min(0, Math.max(1 - s, state.ty));
+}
+function attachPanZoom(p) {
+  p.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = p.getBoundingClientRect();
+    zoomAt(p, Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  p.addEventListener("pointerdown", (e) => {
+    p.setPointerCapture(e.pointerId);
+    p.classList.add("dragging");
+    const r = p.getBoundingClientRect();
+    let lx = e.clientX, ly = e.clientY;
+    const sliderDrag = state.mode === "slider" && state.scale === 1;
+    const move = (ev) => {
+      if (sliderDrag) {
+        state.split = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+      } else {
+        state.tx += (ev.clientX - lx) / r.width;
+        state.ty += (ev.clientY - ly) / r.height;
+        lx = ev.clientX; ly = ev.clientY;
+        clampPan();
+      }
+      applyTransform();
+    };
+    const up = () => { p.classList.remove("dragging"); p.removeEventListener("pointermove", move); p.removeEventListener("pointerup", up); };
+    p.addEventListener("pointermove", move);
+    p.addEventListener("pointerup", up);
+    if (sliderDrag) move(e);
+  });
+  // In slider mode at zoom > 1, hold Alt while moving to place the divider.
+  p.addEventListener("pointermove", (e) => {
+    if (state.mode === "slider" && e.altKey) {
+      const r = p.getBoundingClientRect();
+      state.split = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      applyTransform();
+    }
+  });
+}
+function resetZoom() { state.scale = 1; state.tx = 0; state.ty = 0; applyTransform(); }
+function nativeZoom() {
+  const p = panels[0]; if (!p) return;
+  const sh = sources[0].shots[state.frame];
+  const fit = Math.min(p.clientWidth / sh.width, p.clientHeight / sh.height);
+  const target = 1 / fit;
+  if (target <= 1) { resetZoom(); return; }
+  zoomAt(p, target / state.scale, p.clientWidth / 2, p.clientHeight / 2);
+}
+$("fit").addEventListener("click", resetZoom);
+$("native").addEventListener("click", nativeZoom);
+
+$("helpBtn").addEventListener("click", () => {
+  const h = $("help"); h.hidden = !h.hidden; $("helpBtn").setAttribute("aria-expanded", !h.hidden);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "SELECT" || e.metaKey || e.ctrlKey) return;
+  const n = sources.length;
+  if (e.key === "ArrowRight") { state.frame = Math.min(frames.length - 1, state.frame + 1); render(); }
+  else if (e.key === "ArrowLeft") { state.frame = Math.max(0, state.frame - 1); render(); }
+  else if (/^[1-9]$/.test(e.key) && +e.key <= n) {
+    const i = +e.key - 1;
+    if (state.mode === "grid") state.mode = "flicker";
+    if (state.mode === "slider") state.b = i; else state.flick = i;
+    render();
+  }
+  else if (e.key === " ") { e.preventDefault(); if (state.mode !== "flicker") state.mode = "flicker"; state.flick = (state.flick + 1) % n; render(); }
+  else if (e.key === "g" || e.key === "G") setMode("grid");
+  else if (e.key === "s" || e.key === "S") setMode("slider");
+  else if (e.key === "f" || e.key === "F") setMode("flicker");
+  else if (e.key === "0") resetZoom();
+  else if (e.key === "n" || e.key === "N") nativeZoom();
+  else if (e.key === "+" || e.key === "=") { const p = panels[0]; p && zoomAt(p, 1.25, p.clientWidth / 2, p.clientHeight / 2); }
+  else if (e.key === "-") { const p = panels[0]; p && zoomAt(p, 0.8, p.clientWidth / 2, p.clientHeight / 2); }
+  else if (e.key === "?") $("helpBtn").click();
+  else return;
+});
+window.addEventListener("resize", render);
+render();
+</script>
+</body>
+</html>

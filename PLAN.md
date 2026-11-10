@@ -153,7 +153,13 @@ out/<comp name>/comp.json   # project snapshot, seed, offsets, frame list, slow.
 ```
 File names stay ASCII-safe. Group labels go into the slow.pics image names unchanged.
 
-## 5. slow.pics client (anonymous)
+## 5. slow.pics client (anonymous) — ON HOLD
+
+> **Status (M3):** slow.pics' rules (https://slow.pics/about#scripts) say upload scripts and tools need permission from staff, and undiscussed tools may be blocked. The site also refuses automated requests. Without that permission, the tool doesn't talk to slow.pics. Instead:
+> - Screenshots are named `{frame:06}_{source#}-{label}.png`, so name order is frame by frame with sources in `-s` order, ready to drag into the slow.pics web uploader by hand (`--open-slowpics` opens the folder and the page).
+> - Every comparison gets an offline `index.html` viewer (side-by-side, slider, flicker, synced zoom/pan, keyboard navigation). Season runs also get an index page linking each episode.
+>
+> The flow below is kept for reference in case permission is granted.
 
 This is an **unofficial** flow: the same HTTP calls the website makes, as reverse-engineered by vs-preview. It is isolated behind a trait so breakage only affects one module, and it uses a descriptive User-Agent.
 
@@ -225,7 +231,7 @@ Licence: ship `LICENSE` (GPLv3) and the third-party notices for ffmpeg, ffms2, z
 | M0 | **Deps + FFI spike** | ffmpeg/ffms2/zimg build statically on all 3 targets in CI. A Rust test decodes frame N via ffms2, converts it via zimg and writes a PNG. The seek-vs-sequential hash test passes on the sample corpus. |
 | M1 | **Core pipeline (CLI)** | `comp run` with 2+ progressive sources, manual offsets and plain seeded random frames writes the correct PNGs at native resolution. Colour matrix fallbacks are tested. |
 | M2 | **Selection + pairing** ✅ | Stratified sampling, dark/transition/near-duplicate rejection, frame-type preference, episode parser with a test table, multi-episode runs, project file. OP/ED exclusion from manual ranges and chapters. |
-| M3 | **slow.pics upload** | Anonymous upload creates a working comparison, with retries and a cap. `comp upload` works on existing output. Limits are documented. |
+| M3 | **slow.pics upload** (on hold: needs site permission; offline viewer + manual-upload layout shipped instead) | Anonymous upload creates a working comparison, with retries and a cap. `comp upload` works on existing output. Limits are documented. |
 | M4 | **GUI** | Sources → Pairing → Sync (manual offset) → Settings → Run → Results → Upload, all working end to end. |
 | M5 | **Auto-suggest offsets** | Correct offset found on test pairs (WEB vs BD with a logo offset, DVD vs BD at different resolutions), with a confidence score that clearly flags wrong matches. Cross-episode OP/ED repeat detection (it reuses the same pHash sequences). |
 | M6 | **IVTC / deinterlace** ✅ implemented early (real BD sources are often 1080i telecined); still to do: real-remux validation, auto-detecting telecine vs interlaced | A telecined NTSC DVD source produces clean progressive frames. Output-timeline frame N is deterministic (windowed result = sequential result) and is cached. |

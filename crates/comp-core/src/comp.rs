@@ -343,6 +343,7 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
     };
     let json = serde_json::to_string_pretty(&result).expect("serialise comp.json");
     std::fs::write(spec.out_dir.join("comp.json"), json)?;
+    crate::viewer::write(&result)?;
     Ok(result)
 }
 
@@ -370,7 +371,9 @@ fn shoot_source(
         let pict = frame.pict_type;
         let img = convert::to_rgb(&frame, info.sar, &conv)?;
         color.get_or_insert(img.color);
-        let file = format!("{rf:06}_{label}.png");
+        // Frame-major, then source order: plain name order groups each frame's images together
+        // in -s order (handy for drag-and-drop uploaders and for the viewer).
+        let file = format!("{rf:06}_{}-{label}.png", index + 1);
         let path = spec.out_dir.join(&file);
         convert::write_png(&img, &path, spec.png)?;
         on_event(Event::Shot { source: index, index: k, path });

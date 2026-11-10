@@ -42,3 +42,5 @@ Useful `run` options:
 - `--exclude-op-ed`, `--exclude 1:30-3:00`: leave out OP/ED chapters or time ranges. Episodes are compared in full by default.
 - `--skip-duplicates`, `--skip-flat`, `--dark 0.1`, `--no-reject`: change the frame-picking rules. By default only black screens and scene changes are skipped.
 - `--matrix LABEL=709`, `--no-sar`.
+- `--open`: open the offline viewer (`index.html`, written next to the PNGs) when done.
+- `--open-slowpics`: open the output folder and slow.pics' upload page for a manual drag-and-drop upload. Automated uploads need slow.pics staff permission, so the tool doesn't upload itself.
