@@ -14,7 +14,8 @@ use std::time::{Instant, SystemTime};
 
 use comp_core::comp::{self, CompSpec, Event, FramePick, SelectOptions, SourceSpec};
 use comp_core::convert::{self, ConvertOptions};
-use comp_core::filter::{FieldMode, FieldOptions, FieldOrder};
+use comp_core::filter::{AnySource, FieldMode, FieldOptions, FieldOrder, FilteredSource};
+use comp_core::sync::{suggest_offset, SyncOptions};
 use comp_core::pairing;
 use comp_core::season::{self, SeasonEvent};
 use comp_core::project::{FrameTypeRule, Project, ProjectSource, Rules};
@@ -46,6 +47,28 @@ enum Cmd {
     },
     /// Run a comparison from a saved TOML project file.
     Project { file: PathBuf },
+    /// Suggest offsets for every source against the first one (scene-cut matching).
+    /// With folders, the first episode present in every source is used.
+    Sync {
+        /// LABEL=PATH (file or folder), repeatable; the first is the reference.
+        #[arg(short = 's', long = "source", required = true, value_parser = parse_kv)]
+        sources: Vec<(String, String)>,
+        /// IVTC a source: LABEL[:tff|bff].
+        #[arg(long = "ivtc")]
+        ivtc: Vec<String>,
+        /// Deinterlace a source: LABEL[:tff|bff].
+        #[arg(long = "deint")]
+        deint: Vec<String>,
+        /// Reference window start in seconds (default: 10% in).
+        #[arg(long)]
+        start: Option<f64>,
+        /// Reference window length in seconds.
+        #[arg(long, default_value_t = 60.0)]
+        len: f64,
+        /// Largest offset searched, in seconds.
+        #[arg(long, default_value_t = 15.0)]
+        search: f64,
+    },
     /// Show how episodes in several folders pair up (no decoding).
     Pair {
         /// LABEL=FOLDER (or file), repeatable.
@@ -260,6 +283,51 @@ fn main() -> Result<()> {
             let deint = field(|s| &s.deint);
             let matrices = p.sources.iter().filter_map(|s| s.matrix.clone().map(|m| (s.label.clone(), m))).collect();
             run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, select, false, false)?;
+        }
+        Cmd::Sync { sources, ivtc, deint, start, len, search } => {
+            let paths: Vec<PathBuf> = sources.iter().map(|(_, p)| PathBuf::from(p)).collect();
+            let (_, pairs) = season::plan(&paths)?;
+            let row = pairs.complete().next().context("no episode is present in every source")?.clone();
+            if pairs.rows.len() > 1 {
+                println!("using {}", row.episode);
+            }
+            let field_of = |label: &str| -> Option<FieldOptions> {
+                for (list, mode) in [(&ivtc, FieldMode::Ivtc), (&deint, FieldMode::Deinterlace)] {
+                    for item in list {
+                        let (l, order) = match item.rsplit_once(':') {
+                            Some((l, "tff")) => (l, FieldOrder::Tff),
+                            Some((l, "bff")) => (l, FieldOrder::Bff),
+                            _ => (item.as_str(), FieldOrder::Auto),
+                        };
+                        if l == label {
+                            return Some(FieldOptions { mode, order });
+                        }
+                    }
+                }
+                None
+            };
+            let open_any = |label: &str, path: &Path| -> Result<AnySource> {
+                let vs = open(&path.to_path_buf())?;
+                Ok(match field_of(label) {
+                    None => AnySource::Plain(vs),
+                    Some(fo) => AnySource::Filtered(Box::new(FilteredSource::new(vs, fo, index_cache().as_deref(), |_, _| true)?)),
+                })
+            };
+            let mut reference = open_any(&sources[0].0, row.files[0].as_ref().unwrap())?;
+            let opts = SyncOptions { window_start: start, window_len: len, search };
+            for (i, (label, _)) in sources.iter().enumerate().skip(1) {
+                let mut other = open_any(label, row.files[i].as_ref().unwrap())?;
+                let s = suggest_offset(&mut reference, &mut other, &opts, |_| true)?;
+                let verdict = if s.confidence >= 0.5 { "confident" } else if s.confidence >= 0.3 { "check it" } else { "unreliable" };
+                let precision = if s.precision_frames == 0 { "frame-exact".to_string() } else { format!("±{} frames", s.precision_frames) };
+                println!(
+                    "{label:<12} offset {:+.3}s ({precision})  confidence {:.2} ({verdict})  [{}; {} of {} cuts matched; corr {:.2} vs {:.2} baseline]",
+                    s.offset_seconds, s.confidence, s.method, s.matched_cuts, s.ref_cuts, s.correlation, s.baseline
+                );
+                if s.confidence >= 0.3 && s.offset_seconds != 0.0 {
+                    println!("{:<12} use: --offset {label}={}s", "", s.offset_seconds);
+                }
+            }
         }
         Cmd::Pair { sources } => {
             let lists: Vec<Vec<PathBuf>> =

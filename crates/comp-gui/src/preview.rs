@@ -10,6 +10,7 @@ use std::thread;
 use comp_core::convert::{self, ConvertOptions};
 use comp_core::filter::{AnySource, FieldOptions, FilteredSource};
 use comp_core::source::{self, OpenOptions, VideoSource};
+use comp_core::sync::{suggest_offset, SyncOptions, SyncSuggestion};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceConfig {
@@ -23,6 +24,8 @@ pub enum Request {
     Configure(Vec<SourceConfig>),
     /// Decode reference frame `ref_frame` and the matching frame of every other source.
     Frame { ref_frame: i32, offsets: Vec<(f64, i32)>, max_width: u32, stretch: bool },
+    /// Suggest an offset for source `index` against the reference.
+    Suggest { index: usize },
 }
 
 pub struct PreviewImage {
@@ -39,6 +42,7 @@ pub enum Reply {
     Status(String),
     Ready { ref_frames: i32, ref_times: Vec<f64> },
     Images { ref_frame: i32, images: Vec<Result<PreviewImage, String>> },
+    Suggestion { index: usize, result: Result<SyncSuggestion, String> },
     Error(String),
 }
 
@@ -74,12 +78,18 @@ fn run(rx: Receiver<Request>, tx: Sender<Reply>, repaint: impl Fn()) {
         let Ok(first) = rx.recv() else { return };
         let mut configure = None;
         let mut frame = None;
+        let mut suggest: Vec<usize> = Vec::new();
         let mut take = |r: Request| match r {
             Request::Configure(c) => {
                 configure = Some(c);
                 frame = None; // a frame request for the old set is stale
             }
             f @ Request::Frame { .. } => frame = Some(f),
+            Request::Suggest { index } => {
+                if !suggest.contains(&index) {
+                    suggest.push(index);
+                }
+            }
         };
         take(first);
         loop {
@@ -161,6 +171,17 @@ fn run(rx: Receiver<Request>, tx: Sender<Reply>, repaint: impl Fn()) {
                 });
             }
             send(Reply::Images { ref_frame, images });
+        }
+
+        for index in suggest {
+            if index == 0 || index >= sources.len() {
+                continue;
+            }
+            send(Reply::Status("Finding offset (matching scene cuts)…".into()));
+            let (head, tail) = sources.split_at_mut(index);
+            let result = suggest_offset(&mut head[0].1, &mut tail[0].1, &SyncOptions::default(), |_| true).map_err(|e| e.to_string());
+            send(Reply::Status(String::new()));
+            send(Reply::Suggestion { index, result });
         }
     }
 }

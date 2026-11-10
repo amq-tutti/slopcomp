@@ -37,6 +37,7 @@ order, against the MD5s from an independent system ffmpeg decode.
 comp info <files…>
 comp shot <file> <frame…> -o <dir>              # lossless PNGs of single frames
 comp pair -s BD=/bd/folder -s DVD=/dvd/folder   # check episode pairing (no decoding)
+comp sync -s BD=/bd/ep01.mkv -s DVD=/dvd/ep01.mkv   # suggest offsets (scene cuts), with confidence
 comp run  -s BD=/bd/ep01.mkv -s DVD=/dvd/ep01.mkv -n 20 --seed 1
 comp run  -s BD=/bd/folder -s DVD=/dvd/folder   # whole season, one comparison per episode
 comp project setup.toml                         # run a saved project (see --save-project)

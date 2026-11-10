@@ -17,6 +17,7 @@ pub mod pairing;
 pub mod project;
 pub mod source;
 pub mod stats;
+pub mod sync;
 pub mod viewer;
 
 pub use error::{Error, Result};

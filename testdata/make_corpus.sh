@@ -63,4 +63,27 @@ gen cuts_black.mkv -f lavfi -i "testsrc2=size=640x360:rate=24000/1001:duration=4
   -f lavfi -i "color=black:size=640x360:rate=24000/1001:duration=2.002" \
   -f lavfi -i "mandelbrot=size=640x360:rate=24000/1001,trim=end_frame=96" \
   -filter_complex "[0][1][2]concat=n=3:v=1,format=yuv420p" -c:v libx264 -preset fast -crf 16 -x264-params keyint=48
+# --- Offset suggestion: ~70 s of varied shots with hard cuts at irregular intervals (the reference),
+# and the same content starting 2.044 s (49 frames) later, re-encoded at a different resolution,
+# codec and colour handling (DVD-like 720x480 anamorphic MPEG-2 with a 4:3 pillarbox), plus a
+# telecined 29.97i version of it for IVTC.
+CUTS_FILTER="[0]trim=end_frame=170[a];[1]trim=end_frame=95[b];[2]trim=end_frame=260[c];[3]trim=end_frame=130[d];\
+[4]trim=end_frame=210[e];[5]trim=end_frame=75[f];[6]trim=end_frame=300[g];[7]trim=end_frame=140[h];[8]trim=end_frame=190[i];\
+[a][b][c][d][e][f][g][h][i]concat=n=9:v=1,format=yuv420p"
+CUTS_IN=(-f lavfi -i "testsrc2=size=1280x720:rate=24000/1001"
+  -f lavfi -i "mandelbrot=size=1280x720:rate=24000/1001:start_scale=2"
+  -f lavfi -i "life=size=1280x720:rate=24000/1001:mold=10:ratio=0.3:death_color=#202060:life_color=#e0c040,scale=1280:720"
+  -f lavfi -i "cellauto=size=1280x720:rate=24000/1001:rule=110"
+  -f lavfi -i "mandelbrot=size=1280x720:rate=24000/1001:start_x=-0.75:start_y=0.1:start_scale=0.4"
+  -f lavfi -i "smptehdbars=size=1280x720:rate=24000/1001,hue=H=t*40"
+  -f lavfi -i "testsrc=size=1280x720:rate=24000/1001"
+  -f lavfi -i "life=size=1280x720:rate=24000/1001:ratio=0.6:life_color=#40e080,scale=1280:720"
+  -f lavfi -i "rgbtestsrc=size=1280x720:rate=24000/1001,rotate=t*0.4")
+gen cuts_ref.mkv "${CUTS_IN[@]}" -filter_complex "$CUTS_FILTER" -c:v libx264 -preset fast -crf 18
+gen cuts_late_dvd.mpg -i "$OUT/cuts_ref.mkv" \
+  -vf "trim=start_frame=49,setpts=PTS-STARTPTS,scale=540:480,pad=720:480:90:0,setsar=8/9,eq=gamma=1.1:saturation=0.9" \
+  -c:v mpeg2video -b:v 6M -g 15 -bf 2 -aspect 4:3 -f vob
+gen cuts_late_telecined.mkv -i "$OUT/cuts_ref.mkv" \
+  -vf "trim=start_frame=49,setpts=PTS-STARTPTS,scale=960:540,telecine=first_field=top:pattern=23,setfield=tff" \
+  -c:v libx264 -preset fast -crf 16 -flags +ildct+ilme -x264-params tff=1 -field_order tt
 echo ">> corpus ready in $OUT"

@@ -30,6 +30,8 @@ struct SyncState {
     error: Option<String>,
     images: Vec<Result<(TextureHandle, i32, char, (u32, u32)), String>>,
     flicker: Option<usize>,
+    /// Offset suggestions per source index (None while running).
+    suggestions: std::collections::HashMap<usize, Option<Result<comp_core::sync::SyncSuggestion, String>>>,
 }
 
 enum RunMsg {
@@ -68,6 +70,8 @@ pub struct App {
     run: Option<RunState>,
     toast: Option<(String, bool, Instant)>,
     project_path: Option<PathBuf>,
+    /// Developer flag --auto-sync: request offset suggestions once the sync sources are open.
+    auto_sync: bool,
 }
 
 const STORAGE_KEY: &str = "setup";
@@ -84,7 +88,8 @@ impl App {
                 project_path = Some(p);
             }
         }
-        // Developer flags: --tab=sources|sync|run and --start (begin a run immediately).
+        // Developer flags: --tab=sources|sync|run, --start (begin a run immediately),
+        // --auto-sync (suggest offsets once the sync view has opened its sources).
         let args: Vec<String> = std::env::args().collect();
         let tab = match args.iter().find_map(|a| a.strip_prefix("--tab=")) {
             Some("sync") => Tab::Sync,
@@ -108,10 +113,12 @@ impl App {
                 error: None,
                 images: Vec::new(),
                 flicker: None,
+                suggestions: Default::default(),
             },
             run: None,
             toast: None,
             project_path,
+            auto_sync: args.iter().any(|a| a == "--auto-sync"),
         };
         app.tab = tab;
         if autostart && app.setup.problems().is_empty() {
@@ -689,6 +696,9 @@ impl App {
                         })
                         .collect();
                 }
+                Reply::Suggestion { index, result } => {
+                    self.sync.suggestions.insert(index, Some(result));
+                }
                 Reply::Error(e) => {
                     self.sync.status.clear();
                     self.sync.error = Some(e);
@@ -734,6 +744,7 @@ impl App {
             self.sync.sent = Some(cfgs);
             self.sync.ready = None;
             self.sync.images.clear();
+            self.sync.suggestions.clear();
         }
 
         // Controls.
@@ -779,20 +790,70 @@ impl App {
             ui.colored_label(Color32::from_rgb(220, 80, 80), e);
         }
 
-        // Offsets for non-reference sources.
+        // Offsets for non-reference sources, with automatic suggestions.
+        let ready = self.sync.ready.is_some();
+        let mut ask: Vec<usize> = Vec::new();
         ui.horizontal_wrapped(|ui| {
             for (i, r) in self.setup.sources.iter_mut().enumerate().skip(1) {
                 ui.group(|ui| {
-                    ui.label(RichText::new(&r.label).strong());
-                    if ui.small_button("-1").clicked() {
-                        r.offset_frames -= 1;
-                    }
-                    ui.add(egui::DragValue::new(&mut r.offset_frames).speed(0.2).suffix(" f"));
-                    if ui.small_button("+1").clicked() {
-                        r.offset_frames += 1;
-                    }
-                    ui.add(egui::DragValue::new(&mut r.offset_seconds).speed(0.01).suffix(" s").max_decimals(3));
-                    let _ = i;
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&r.label).strong());
+                            if ui.small_button("-1").clicked() {
+                                r.offset_frames -= 1;
+                            }
+                            ui.add(egui::DragValue::new(&mut r.offset_frames).speed(0.2).suffix(" f"));
+                            if ui.small_button("+1").clicked() {
+                                r.offset_frames += 1;
+                            }
+                            ui.add(egui::DragValue::new(&mut r.offset_seconds).speed(0.01).suffix(" s").max_decimals(3));
+                            let busy = matches!(self.sync.suggestions.get(&i), Some(None));
+                            if ui
+                                .add_enabled(ready && !busy, egui::Button::new("Auto").small())
+                                .on_hover_text("Find the offset by matching scene cuts (decodes about a minute of video)")
+                                .clicked()
+                            {
+                                ask.push(i);
+                            }
+                        });
+                        match self.sync.suggestions.get(&i) {
+                            Some(None) => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(RichText::new("matching scene cuts…").small());
+                                });
+                            }
+                            Some(Some(Ok(sg))) => {
+                                let precision =
+                                    if sg.precision_frames == 0 { "frame-exact".to_string() } else { format!("±{} f", sg.precision_frames) };
+                                let (verdict, color) = if sg.confidence >= 0.5 {
+                                    ("confident", Color32::from_rgb(80, 180, 100))
+                                } else if sg.confidence >= 0.3 {
+                                    ("check it", Color32::from_rgb(220, 170, 60))
+                                } else {
+                                    ("unreliable", Color32::from_rgb(220, 80, 80))
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        color,
+                                        RichText::new(format!("{:+.3} s ({precision}), {verdict} {:.2}", sg.offset_seconds, sg.confidence)).small(),
+                                    )
+                                    .on_hover_text(format!(
+                                        "{}: {} of {} cuts matched; correlation {:.2} vs {:.2} at wrong offsets",
+                                        sg.method, sg.matched_cuts, sg.ref_cuts, sg.correlation, sg.baseline
+                                    ));
+                                    if ui.small_button("Apply").clicked() {
+                                        r.offset_seconds = sg.offset_seconds;
+                                        r.offset_frames = 0;
+                                    }
+                                });
+                            }
+                            Some(Some(Err(e))) => {
+                                ui.colored_label(Color32::from_rgb(220, 80, 80), RichText::new(e).small());
+                            }
+                            None => {}
+                        }
+                    });
                 });
             }
             ui.separator();
@@ -801,6 +862,14 @@ impl App {
                 self.sync.flicker = flick.then_some(0);
             }
         });
+        if self.auto_sync && ready {
+            self.auto_sync = false;
+            ask.extend(1..self.setup.sources.len());
+        }
+        for i in ask {
+            self.sync.suggestions.insert(i, None);
+            self.worker.send(Request::Suggest { index: i });
+        }
 
         // Request frames when anything relevant changed.
         if self.sync.ready.is_some() {
