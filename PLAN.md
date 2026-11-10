@@ -60,14 +60,18 @@ The project file is shared, so a comparison set up in the GUI can be re-run head
   MPEG-2 in MKV and in TS seeks correctly.
 - **Correctness test (M0):** decode N random frames with seeking and the same frames sequentially from the start, then compare hashes. Run this across a corpus of h264, hevc 10-bit, AV1, MPEG-2 (DVD VOB/MKV) and VC-1 (old BD) files.
 
-### 3.2 IVTC / deinterlacing — libavfilter
-- Telecined NTSC DVD: `fieldmatch` (a port of TIVTC's TFM), then `decimate` (TDecimate), then optionally `bwdif` as a post-processor for combed frames that remain.
-- Truly interlaced content: `bwdif` (or `yadif`), in send-frame mode.
-- **Problem:** decimation changes the frame count, so the "frame N" a user means is a frame on the *output* timeline.
-  **Solution:** an analysis pass decodes the whole source once through the filter graph and records `output_frame → (source_frame, field_match)`. The result is cached next to the index.
-  Random access then rebuilds the filter graph on a short window around the target. The window starts on a decimation-cycle boundary, with pre-roll to cover fieldmatch's neighbour frames. The analysis pass checks that this windowed output matches the sequential output, and falls back to wider windows if it doesn't.
-- Per-source setting: `field_order` (auto/TFF/BFF) and `mode` (none / ivtc / deinterlace). Auto-detection can be a heuristic later (sample combing metrics). It starts as a manual choice.
-- This is the riskiest component, so it lands **after** the core pipeline works for progressive sources (see milestones).
+### 3.2 IVTC / deinterlacing — libavfilter (implemented, `comp-core::filter`)
+- **IVTC chain:** `fieldmatch` (TFM port, default `combmatch=sc` as in VFM), then `bwdif` (`deint=interlaced`, only for frames still combed after matching), then `decimate` (TDecimate port, 5 → 4).
+  **Deinterlace chain:** `bwdif` with `deint=all`, one output per input. Input must be 8-bit YUV, as `fieldmatch` requires.
+  `combmatch=full` was rejected: it turns false comb detections on sharp detail into wrong field matches.
+- **Source tagging:** `decimate` rewrites pts, so every input AVFrame carries its source index in `AVFrame.opaque`, which every filter in the chain copies. Each output therefore knows its source frame.
+- **Analysis pass** (once per file, cached as `<key>.<mode>-<order>.fieldmap`): sequential decode through the chain, recording for each output `(source index, xxh3 of pixels)`.
+- **Random access:** rebuild the chain and feed from 2 decimation cycles before the target (cycle-aligned), then take the output tagged with the wanted source index. **Its hash must match the analysis pass**, otherwise the window grows ×4, down to frame 0. Ascending requests continue the running chain.
+  Verified bit-exact against lossless telecined ground truth, with 0 window retries on the corpus.
+- **Timestamps:** IVTC output is CFR at 4/5 of the source rate, anchored per decimation cycle. Telecined field timestamps sit up to half a film frame early, which would make time alignment against progressive sources pick the neighbouring frame.
+- **Guard:** IVTC is refused on sources already at ≤ 25 fps, since decimating would drop real frames.
+- Per-source options: `--ivtc LABEL[:tff|bff]`, `--deint LABEL[:tff|bff]`. Field order is auto-detected from the stream otherwise.
+- Speed: analysis runs at ~150 fps for 1080i on an M-series Mac, so a 24-minute 1080i episode takes ~5 minutes once. A cached shot costs a ~15-frame replay window.
 
 ### 3.3 Colour conversion — zimg
 - zimg (the same library VapourSynth's resize uses) converts YUV to RGB24 with correct matrix, range and chroma siting, and error-diffusion dithering for >8-bit input.
@@ -222,7 +226,7 @@ Licence: ship `LICENSE` (GPLv3) and the third-party notices for ffmpeg, ffms2, z
 | M3 | **slow.pics upload** | Anonymous upload creates a working comparison, with retries and a cap. `comp upload` works on existing output. Limits are documented. |
 | M4 | **GUI** | Sources → Pairing → Sync (manual offset) → Settings → Run → Results → Upload, all working end to end. |
 | M5 | **Auto-suggest offsets** | Correct offset found on test pairs (WEB vs BD with a logo offset, DVD vs BD at different resolutions), with a confidence score that clearly flags wrong matches. Cross-episode OP/ED repeat detection (it reuses the same pHash sequences). |
-| M6 | **IVTC / deinterlace** (*priority: real BD sources are often 1080i telecined, e.g. To Heart*) | A telecined NTSC DVD source produces clean progressive frames. Output-timeline frame N is deterministic (windowed result = sequential result) and is cached. |
+| M6 | **IVTC / deinterlace** ✅ implemented early (real BD sources are often 1080i telecined); still to do: real-remux validation, auto-detecting telecine vs interlaced | A telecined NTSC DVD source produces clean progressive frames. Output-timeline frame N is deterministic (windowed result = sequential result) and is cached. |
 | M7 | **Packaging + release** | Signed .app/.dmg, Windows zip, AppImage built from a tag, each tested on a clean machine or VM. |
 
 M5 and M6 are independent of M4 and can be built in parallel once M2 lands.

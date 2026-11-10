@@ -164,7 +164,7 @@ pub struct PixelLayout {
 }
 
 impl PixelLayout {
-    fn from_av(id: i32) -> Result<Self> {
+    pub(crate) fn from_av(id: i32) -> Result<Self> {
         let desc = unsafe { sys::av_pix_fmt_desc_get(id) };
         if desc.is_null() {
             return Err(Error::UnsupportedPixelFormat { id, name: "?".into() });
@@ -245,7 +245,7 @@ pub struct Frame<'a> {
     pub key_frame: bool,
     pub interlaced: bool,
     pub top_field_first: bool,
-    planes: [(&'a [u8], usize); 3],
+    pub(crate) planes: [(&'a [u8], usize); 3],
 }
 
 impl<'a> Frame<'a> {
@@ -406,6 +406,13 @@ impl VideoSource {
 
     pub fn info(&self) -> &VideoInfo {
         &self.info
+    }
+
+    /// Field order reported by the stream: `Some(true)` = top field first. `None` if unknown.
+    pub fn top_field_first(&self) -> Option<bool> {
+        let props = unsafe { &*sys::FFMS_GetVideoProperties(self.vs) };
+        // ffms2 reports 1 for TFF, 0 for BFF (and for progressive streams, where it doesn't matter).
+        Some(props.TopFieldFirst != 0)
     }
 
     /// Presentation time of every frame in seconds, relative to the first frame (ascending).

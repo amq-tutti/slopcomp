@@ -45,4 +45,16 @@ gen mpeg2_es.m2v "${SRC[@]}" -c:v mpeg2video -b:v 4M -g 15 -bf 2 -pix_fmt yuv420
 gen late24_hevc.mkv -f lavfi -i "testsrc2=size=640x360:rate=24000/1001:duration=11" \
   -vf "trim=start_frame=24:end_frame=240,setpts=PTS-STARTPTS" -c:v libx265 -preset fast -pix_fmt yuv420p \
   -x265-params "log-level=error:keyint=48"
+# --- Telecine (IVTC) cases. Ground truth: the progressive 23.976 frames, losslessly (FFV1).
+# The same frames are 3:2-telecined to 29.97i (top field first), losslessly and as lossy interlaced
+# H.264 (BD-like, in M2TS) and MPEG-2 (DVD-like, in a program stream).
+# Blurred: testsrc2's per-pixel noise square trips fieldmatch's combing detector (false positives).
+TC_SRC=(-f lavfi -i "testsrc2=size=640x360:rate=24000/1001:duration=10,gblur=sigma=1.5,format=yuv420p")
+TC_FILTER="telecine=first_field=top:pattern=23,setfield=tff"
+gen ivtc_truth_ffv1.mkv "${TC_SRC[@]}" -c:v ffv1 -level 3
+gen ivtc_telecined_ffv1.mkv "${TC_SRC[@]}" -vf "$TC_FILTER" -c:v ffv1 -level 3 -field_order tt
+gen ivtc_telecined_h264.m2ts "${TC_SRC[@]}" -vf "$TC_FILTER" -c:v libx264 -preset fast -crf 14 -flags +ildct+ilme \
+  -x264-params "tff=1:keyint=30:bframes=3" -field_order tt -f mpegts -mpegts_m2ts_mode 1
+gen ivtc_telecined_dvd.mpg "${TC_SRC[@]}" -vf "$TC_FILTER" -c:v mpeg2video -b:v 8M -g 15 -bf 2 -flags +ildct+ilme -alternate_scan 1 \
+  -field_order tt -f vob
 echo ">> corpus ready in $OUT"

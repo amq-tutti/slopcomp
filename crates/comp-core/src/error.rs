@@ -16,6 +16,10 @@ pub enum Error {
     BadPath(PathBuf),
     #[error("{0}")]
     Spec(String),
+    #[error("field processing: {0}")]
+    Filter(String),
+    #[error("cancelled")]
+    Cancelled,
     #[error("png: {0}")]
     Png(#[from] png::EncodingError),
     #[error(transparent)]

@@ -14,6 +14,7 @@ use std::time::{Instant, SystemTime};
 
 use comp_core::comp::{self, CompSpec, Event, FramePick, SourceSpec};
 use comp_core::convert::{self, ConvertOptions};
+use comp_core::filter::{FieldMode, FieldOptions, FieldOrder};
 use comp_core::source::{OpenOptions, VideoSource};
 
 #[derive(Parser)]
@@ -62,6 +63,13 @@ enum Cmd {
         /// Explicit reference frame numbers instead of random picks.
         #[arg(long = "frame", num_args = 1..)]
         explicit: Vec<i32>,
+        /// Inverse-telecine a source: LABEL, LABEL:tff or LABEL:bff (e.g. 1080i BD remux, NTSC DVD).
+        /// Field matching + decimation to 23.976p; frames still combed after matching are deinterlaced.
+        #[arg(long = "ivtc")]
+        ivtc: Vec<String>,
+        /// Deinterlace every frame of a source (truly interlaced content): LABEL[:tff|bff].
+        #[arg(long = "deint")]
+        deint: Vec<String>,
         /// Matrix override as LABEL=709|601|470bg|2020. Repeatable.
         #[arg(long = "matrix", value_parser = parse_kv)]
         matrices: Vec<(String, String)>,
@@ -163,8 +171,8 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::Run { sources, offsets, frames, seed, explicit, matrices, name, out, no_sar } => {
-            run_comp(sources, offsets, frames, seed, explicit, matrices, name, out, no_sar)?;
+        Cmd::Run { sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar } => {
+            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar)?;
         }
     }
     Ok(())
@@ -177,6 +185,8 @@ fn run_comp(
     frames: usize,
     seed: Option<u64>,
     explicit: Vec<i32>,
+    ivtc: Vec<String>,
+    deint: Vec<String>,
     matrices: Vec<(String, String)>,
     name: Option<String>,
     out: PathBuf,
@@ -195,6 +205,17 @@ fn run_comp(
             specs[i].offset_seconds += secs.parse::<f64>().with_context(|| format!("bad time offset '{v}'"))?;
         } else {
             specs[i].offset_frames += v.parse::<i32>().with_context(|| format!("bad frame offset '{v}'"))?;
+        }
+    }
+    for (list, mode) in [(&ivtc, FieldMode::Ivtc), (&deint, FieldMode::Deinterlace)] {
+        for item in list {
+            let (label, order) = match item.rsplit_once(':') {
+                Some((l, "tff")) => (l, FieldOrder::Tff),
+                Some((l, "bff")) => (l, FieldOrder::Bff),
+                _ => (item.as_str(), FieldOrder::Auto),
+            };
+            let i = find(&mut specs, label)?;
+            specs[i].field = Some(FieldOptions { mode, order });
         }
     }
     for (label, v) in &matrices {
@@ -237,6 +258,15 @@ fn run_comp(
                 eprintln!("  indexing {:<12} {pct:>3}%", labels[source]);
             }
         }
+        Event::Analyzing { source, done, total } if total > 0 => {
+            let pct = done * 100 / total;
+            let mut lp = last_pct.lock().unwrap();
+            let key = source + 1000;
+            if lp.get(&key).is_none_or(|&p| pct >= p + 10) {
+                lp.insert(key, pct);
+                eprintln!("  field analysis {:<12} {pct:>3}%", labels[source]);
+            }
+        }
         Event::Opened { source, info } => eprintln!(
             "  opened   {:<12} {}x{} {}-bit, {} frames @ {}/{}, sar {}:{}, {} ({:?} seek)",
             labels[source],
@@ -273,11 +303,12 @@ fn run_comp(
     for s in &res.sources {
         let types: String = s.shots.iter().map(|x| x.pict_type.as_str()).collect();
         println!(
-            "  {:<12} offset {:+.3}s{:+}f{} matrix {}{} {} -> {}x{} types [{types}]",
+            "  {:<12} offset {:+.3}s{:+}f{}{} matrix {}{} {} -> {}x{} types [{types}]",
             s.label,
             s.offset_seconds,
             s.offset_frames,
             if s.vfr { " VFR" } else { "" },
+            s.field_processing.as_deref().map(|f| format!(" {f}")).unwrap_or_default(),
             s.matrix,
             if s.matrix_guessed { " (guessed)" } else { "" },
             if s.full_range { "full" } else { "limited" },

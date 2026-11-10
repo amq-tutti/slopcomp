@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use comp_core::comp::{self, CompSpec, FramePick, SourceSpec};
+use comp_core::filter::{FieldMode, FieldOptions, FieldOrder};
 use comp_core::source::OpenOptions;
 
 fn corpus(name: &str) -> PathBuf {
@@ -88,4 +89,59 @@ fn rejects_offset_on_reference_and_single_source() {
     let other = SourceSpec::new("B", corpus("hevc_10bit.mkv"));
     let err = comp::run(&spec(vec![r, other]), &|_| {}).unwrap_err().to_string();
     assert!(err.contains("reference"), "{err}");
+}
+
+#[test]
+fn ivtc_source_aligns_with_progressive_truth() {
+    if !corpus("ivtc_telecined_dvd.mpg").exists() {
+        eprintln!("SKIP: corpus missing");
+        return;
+    }
+    let ivtc = Some(FieldOptions { mode: FieldMode::Ivtc, order: FieldOrder::Auto });
+    let mut dvd = SourceSpec::new("DVD", corpus("ivtc_telecined_dvd.mpg"));
+    dvd.field = ivtc;
+    let mut bd = SourceSpec::new("BD", corpus("ivtc_telecined_h264.m2ts"));
+    bd.field = ivtc;
+    let spec = CompSpec {
+        name: "ivtc_e2e".into(),
+        sources: vec![SourceSpec::new("TRUTH", corpus("ivtc_truth_ffv1.mkv")), dvd, bd],
+        pick: FramePick::Random { count: 12, seed: 11 },
+        out_dir: Path::new(env!("CARGO_TARGET_TMPDIR")).join("ivtc_e2e"),
+        convert: Default::default(),
+        png: Default::default(),
+        open: OpenOptions::default(),
+    };
+    let res = comp::run(&spec, &|_| {}).unwrap();
+    assert_eq!(res.frames.len(), 12);
+    for s in &res.sources[1..] {
+        assert_eq!(s.field_processing.as_deref(), Some("ivtc-tff"));
+        let mut worst = f64::INFINITY;
+        for (t, x) in res.sources[0].shots.iter().zip(&s.shots) {
+            assert_eq!(t.reference_frame, x.source_frame, "{}: IVTC output index should equal truth index", s.label);
+            let p = psnr(&load_rgb(&res.out_dir.join(&t.file)), &load_rgb(&res.out_dir.join(&x.file)));
+            worst = worst.min(p);
+        }
+        eprintln!("{}: worst RGB PSNR vs truth {worst:.1} dB", s.label);
+        assert!(worst > 35.0, "{}: {worst:.1}", s.label);
+    }
+}
+
+#[test]
+fn ivtc_refuses_progressive_film_rate_sources() {
+    if !corpus("ivtc_truth_ffv1.mkv").exists() {
+        return;
+    }
+    let mut a = SourceSpec::new("A", corpus("h264_opengop.mkv"));
+    a.field = Some(FieldOptions { mode: FieldMode::Ivtc, order: FieldOrder::Auto });
+    let spec = CompSpec {
+        name: "ivtc_refuse".into(),
+        sources: vec![SourceSpec::new("REF", corpus("ivtc_truth_ffv1.mkv")), a],
+        pick: FramePick::Random { count: 2, seed: 1 },
+        out_dir: Path::new(env!("CARGO_TARGET_TMPDIR")).join("ivtc_refuse"),
+        convert: Default::default(),
+        png: Default::default(),
+        open: OpenOptions::default(),
+    };
+    let err = comp::run(&spec, &|_| {}).unwrap_err().to_string();
+    assert!(err.contains("already 23.976"), "{err}");
 }

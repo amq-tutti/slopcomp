@@ -1,3 +1,9 @@
 #include <ffms.h>
 #include <zimg.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/frame.h>
+#include <libavutil/error.h>
+#include <libavutil/log.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersrc.h>
+#include <libavfilter/buffersink.h>

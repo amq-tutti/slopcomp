@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::convert::{self, ConvertOptions, PngCompression};
 use crate::error::{Error, Result};
 use crate::select;
+use crate::filter::{AnySource, FieldOptions, FilteredSource};
 use crate::source::{OpenOptions, VideoInfo, VideoSource};
 
 /// One side of the comparison (e.g. "BD Remux", "WEB-DL").
@@ -22,6 +23,8 @@ pub struct SourceSpec {
     pub matrix_override: Option<i32>,
     pub full_range_override: Option<bool>,
     pub sar_override: Option<(i32, i32)>,
+    /// IVTC / deinterlacing for interlaced or telecined sources.
+    pub field: Option<FieldOptions>,
 }
 
 impl SourceSpec {
@@ -34,6 +37,7 @@ impl SourceSpec {
             matrix_override: None,
             full_range_override: None,
             sar_override: None,
+            field: None,
         }
     }
 }
@@ -64,6 +68,8 @@ pub struct CompSpec {
 #[derive(Debug, Clone)]
 pub enum Event {
     Indexing { source: usize, done: i64, total: i64 },
+    /// Field-processing analysis pass (IVTC / deinterlace), once per file and then cached.
+    Analyzing { source: usize, done: i64, total: i64 },
     Opened { source: usize, info: VideoInfo },
     FramesPicked { frames: Vec<i32>, usable: (i32, i32) },
     Shot { source: usize, index: usize, path: PathBuf },
@@ -89,6 +95,8 @@ pub struct SourceResult {
     pub offset_seconds: f64,
     pub offset_frames: i32,
     pub vfr: bool,
+    /// "ivtc-tff", "deint-bff", … or null.
+    pub field_processing: Option<String>,
     pub container: String,
     pub seek_mode: String,
     pub width: u32,
@@ -148,7 +156,7 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
     std::fs::create_dir_all(&spec.out_dir)?;
 
     // Phase 1: open/index all sources in parallel.
-    let opened: Vec<Result<VideoSource>> = std::thread::scope(|s| {
+    let opened: Vec<Result<AnySource>> = std::thread::scope(|s| {
         let handles: Vec<_> = spec
             .sources
             .iter()
@@ -159,6 +167,16 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
                         on_event(Event::Indexing { source: i, done, total });
                         true
                     })?;
+                    let vs = match src.field {
+                        None => AnySource::Plain(vs),
+                        Some(fo) => {
+                            let fs = FilteredSource::new(vs, fo, spec.open.index_cache.as_deref(), |done, total| {
+                                on_event(Event::Analyzing { source: i, done, total });
+                                true
+                            })?;
+                            AnySource::Filtered(Box::new(fs))
+                        }
+                    };
                     on_event(Event::Opened { source: i, info: vs.info().clone() });
                     Ok(vs)
                 })
@@ -250,7 +268,7 @@ fn shoot_source(
     spec: &CompSpec,
     index: usize,
     src: &SourceSpec,
-    vs: &mut VideoSource,
+    vs: &mut AnySource,
     targets: &[(i32, i32, f64)],
     on_event: &(dyn Fn(Event) + Sync),
 ) -> Result<SourceResult> {
@@ -292,6 +310,13 @@ fn shoot_source(
         offset_seconds: src.offset_seconds,
         offset_frames: src.offset_frames,
         vfr: is_vfr(vs.times()),
+        field_processing: src.field.map(|f| {
+            let tff = match vs {
+                AnySource::Filtered(fs) => fs.top_field_first(),
+                _ => true,
+            };
+            format!("{}-{}", match f.mode { crate::filter::FieldMode::Ivtc => "ivtc", _ => "deint" }, if tff { "tff" } else { "bff" })
+        }),
         container: info.container.clone(),
         seek_mode: format!("{:?}", info.seek_mode),
         width: info.width,
