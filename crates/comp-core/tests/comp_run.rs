@@ -215,3 +215,36 @@ fn frame_type_rule_picks_only_requested_types() {
     assert!(res.fallbacks.is_empty(), "{:?}", res.fallbacks);
     assert!(types.chars().all(|c| c == 'B'), "{types}");
 }
+
+#[test]
+fn black_borders_are_detected_and_cropped() {
+    if !corpus("cuts_late_dvd.mpg").exists() {
+        eprintln!("SKIP: corpus missing");
+        return;
+    }
+    // cuts_late_dvd.mpg: 720x480, SAR 8:9, picture scaled to 540x480 with 90 px black on each side.
+    let mut late = SourceSpec::new("DVD", corpus("cuts_late_dvd.mpg"));
+    late.offset_seconds = -2.044;
+    let mut spec = spec_with("crop", vec![SourceSpec::new("REF", corpus("cuts_ref.mkv")), late], 4, Default::default());
+    spec.convert.apply_sar = true;
+    let res = comp::run(&spec, &|_| {}).unwrap();
+    let c = res.sources[1].crop;
+    eprintln!("detected crop: {c:?}");
+    assert!((88..=92).contains(&c.left) && (88..=92).contains(&c.right), "{c:?}");
+    assert!(c.top <= 1 && c.bottom <= 1, "{c:?}");
+    assert!(res.sources[0].crop.is_none(), "no borders on the reference: {:?}", res.sources[0].crop);
+    // 540 px of picture × 8/9 = 480 wide, 480 tall.
+    let sh = &res.sources[1].shots[0];
+    assert!((478..=482).contains(&sh.width) && sh.height >= 478, "{}x{}", sh.width, sh.height);
+
+    // Turning it off keeps the full frame (720 × 8/9 = 640).
+    let mut spec2 = spec.clone();
+    spec2.name = "nocrop".into();
+    spec2.out_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("nocrop");
+    for s in &mut spec2.sources {
+        s.auto_crop = false;
+    }
+    let res2 = comp::run(&spec2, &|_| {}).unwrap();
+    assert!(res2.sources[1].crop.is_none());
+    assert_eq!(res2.sources[1].shots[0].width, 640);
+}

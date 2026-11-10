@@ -65,6 +65,9 @@ pub struct ConvertOptions {
     pub matrix_override: Option<i32>,
     /// Override range: `true` = full, `false` = limited.
     pub full_range_override: Option<bool>,
+    /// Black borders to remove, in source pixels (applied after the anamorphic stretch, with the
+    /// left/right margins scaled to match).
+    pub crop: Option<crate::crop::Crop>,
 }
 
 /// Colour parameters actually used for a conversion (for display / reporting).
@@ -296,7 +299,26 @@ pub fn to_rgb(frame: &Frame<'_>, sar: (i32, i32), opts: &ConvertOptions) -> Resu
         }
     }
 
-    Ok(RgbImage { width: out_w as u32, height: h as u32, data, color })
+    let img = RgbImage { width: out_w as u32, height: h as u32, data, color };
+    Ok(match opts.crop.filter(|c| !c.is_none()) {
+        Some(c) => crop_rgb(img, c, out_w as f64 / w as f64),
+        None => img,
+    })
+}
+
+/// Crops an RGB image. `sx` maps source x to output x (anamorphic stretch).
+fn crop_rgb(img: RgbImage, c: crate::crop::Crop, sx: f64) -> RgbImage {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let l = ((c.left as f64 * sx).round() as usize).min(w.saturating_sub(1));
+    let r = ((c.right as f64 * sx).round() as usize).min(w - l - 1);
+    let t = (c.top as usize).min(h.saturating_sub(1));
+    let b = (c.bottom as usize).min(h - t - 1);
+    let (nw, nh) = (w - l - r, h - t - b);
+    let mut data = Vec::with_capacity(nw * nh * 3);
+    for y in t..t + nh {
+        data.extend_from_slice(&img.data[(y * w + l) * 3..(y * w + l + nw) * 3]);
+    }
+    RgbImage { width: nw as u32, height: nh as u32, data, color: img.color }
 }
 
 /// PNG compression effort.

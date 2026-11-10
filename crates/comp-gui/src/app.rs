@@ -26,7 +26,7 @@ struct SyncState {
     sent: Option<Vec<SourceConfig>>,
     ready: Option<(i32, Vec<f64>)>,
     frame: i32,
-    last_req: Option<(i32, Vec<(f64, i32)>, bool)>,
+    last_req: Option<(i32, Vec<(f64, i32)>, bool, bool)>,
     status: String,
     error: Option<String>,
     images: Vec<Result<(TextureHandle, i32, char, (u32, u32)), String>>,
@@ -682,6 +682,10 @@ impl App {
             ui.label("Anamorphic");
             ui.checkbox(&mut s.stretch_anamorphic, "Stretch to display aspect (e.g. DVD 720×480 to 853×480)");
             ui.end_row();
+
+            ui.label("Borders");
+            ui.checkbox(&mut s.crop_borders, "Crop black borders (pillarbox / letterbox), detected per source");
+            ui.end_row();
         });
     }
 }
@@ -895,13 +899,14 @@ impl App {
         // Request frames when anything relevant changed.
         if self.sync.ready.is_some() {
             let offsets: Vec<(f64, i32)> = self.setup.sources.iter().map(|r| (r.offset_seconds, r.offset_frames)).collect();
-            let req = (self.sync.frame, offsets.clone(), self.setup.stretch_anamorphic);
+            let req = (self.sync.frame, offsets.clone(), self.setup.stretch_anamorphic, self.setup.crop_borders);
             if self.sync.last_req.as_ref() != Some(&req) {
                 self.worker.send(Request::Frame {
                     ref_frame: self.sync.frame,
                     offsets,
                     max_width: 1600,
                     stretch: self.setup.stretch_anamorphic,
+                    crop: self.setup.crop_borders,
                 });
                 self.sync.last_req = Some(req);
             }

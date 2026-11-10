@@ -70,6 +70,7 @@ impl SourceRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)] // fields added later get their default, so older saved setups still load
 pub struct Setup {
     pub name: String,
     pub out_dir: String,
@@ -85,6 +86,8 @@ pub struct Setup {
     /// (source index, types such as "B").
     pub frame_type: Option<(usize, String)>,
     pub stretch_anamorphic: bool,
+    /// Detect and crop black borders (pillarbox/letterbox).
+    pub crop_borders: bool,
 }
 
 impl Default for Setup {
@@ -107,6 +110,7 @@ impl Default for Setup {
             exclude_op_ed: false,
             frame_type: None,
             stretch_anamorphic: true,
+            crop_borders: true,
         }
     }
 }
@@ -189,6 +193,7 @@ impl Setup {
                 }
                 s.matrix_override = r.matrix;
                 s.field = r.field_options();
+                s.auto_crop = self.crop_borders;
                 s
             })
             .collect();
@@ -236,6 +241,7 @@ impl Setup {
                 flat: self.skip_flat,
             },
             no_sar: !self.stretch_anamorphic,
+            no_crop: !self.crop_borders,
             sources: self
                 .sources
                 .iter()
@@ -278,6 +284,7 @@ impl Setup {
             skip_flat: p.rules.flat,
             exclude_op_ed: p.exclude_op_ed,
             stretch_anamorphic: !p.no_sar,
+            crop_borders: !p.no_crop,
             ..Default::default()
         };
         for ps in &p.sources {

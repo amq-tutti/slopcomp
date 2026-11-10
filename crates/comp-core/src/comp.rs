@@ -23,6 +23,10 @@ pub struct SourceSpec {
     pub matrix_override: Option<i32>,
     pub full_range_override: Option<bool>,
     pub sar_override: Option<(i32, i32)>,
+    /// Detect and remove black borders (pillarbox/letterbox). Ignored when `crop` is set.
+    pub auto_crop: bool,
+    /// Fixed crop in source pixels instead of detection.
+    pub crop: Option<crate::crop::Crop>,
     /// IVTC / deinterlacing for interlaced or telecined sources.
     pub field: Option<FieldOptions>,
 }
@@ -37,6 +41,8 @@ impl SourceSpec {
             matrix_override: None,
             full_range_override: None,
             sar_override: None,
+            auto_crop: true,
+            crop: None,
             field: None,
         }
     }
@@ -124,6 +130,8 @@ pub enum Event {
     /// Field-processing analysis pass (IVTC / deinterlace), once per file and then cached.
     Analyzing { source: usize, done: i64, total: i64 },
     Opened { source: usize, info: VideoInfo },
+    /// Black borders detected (or set) for a source; all-zero means no crop.
+    Cropped { source: usize, crop: crate::crop::Crop },
     FramesPicked { frames: Vec<i32>, usable: (i32, i32) },
     /// Ranges left out of picking (reference seconds), with the reason ("OP (chapter)", …).
     Excluded { ranges: Vec<(f64, f64, String)> },
@@ -163,6 +171,9 @@ pub struct SourceResult {
     pub matrix: i32,
     pub matrix_guessed: bool,
     pub full_range: bool,
+    /// Black borders removed from every shot, in source pixels.
+    #[serde(default)]
+    pub crop: crate::crop::Crop,
     pub shots: Vec<Shot>,
 }
 
@@ -224,7 +235,7 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
     std::fs::create_dir_all(&spec.out_dir)?;
 
     // Phase 1: open/index all sources in parallel.
-    let opened: Vec<Result<AnySource>> = std::thread::scope(|s| {
+    let opened: Vec<Result<(AnySource, crate::crop::Crop)>> = std::thread::scope(|s| {
         let handles: Vec<_> = spec
             .sources
             .iter()
@@ -245,20 +256,33 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
                             AnySource::Filtered(Box::new(fs))
                         }
                     };
+                    let mut vs = vs;
                     on_event(Event::Opened { source: i, info: vs.info().clone() });
-                    Ok(vs)
+                    let crop = match (src.crop, src.auto_crop) {
+                        (Some(c), _) => c,
+                        (None, true) => {
+                            let n = vs.info().num_frames;
+                            crate::crop::detect(&mut vs, 0, n, 24)?
+                        }
+                        (None, false) => crate::crop::Crop::default(),
+                    };
+                    on_event(Event::Cropped { source: i, crop });
+                    Ok((vs, crop))
                 })
             })
             .collect();
         handles.into_iter().map(|h| h.join().expect("source thread panicked")).collect()
     });
     let mut sources = Vec::with_capacity(opened.len());
+    let mut crops = Vec::with_capacity(opened.len());
     spec.check_cancel()?;
     for (i, r) in opened.into_iter().enumerate() {
-        sources.push(r.map_err(|e| match e {
+        let (vs, crop) = r.map_err(|e| match e {
             Error::Cancelled => Error::Cancelled,
             e => Error::Spec(format!("{}: {e}", spec.sources[i].label)),
-        })?);
+        })?;
+        sources.push(vs);
+        crops.push(crop);
     }
 
     // Phase 2: map every reference frame into each source by timestamp, then pick frames inside
@@ -344,7 +368,8 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
             .map(|(i, (mut vs, src))| {
                 let targets: Vec<(i32, i32, f64)> =
                     frames.iter().map(|&r| (r, maps[i][r as usize].unwrap(), ref_times[r as usize])).collect();
-                s.spawn(move || shoot_source(spec, i, src, &mut vs, &targets, on_event))
+                let crop = crops[i];
+                s.spawn(move || shoot_source(spec, i, src, &mut vs, crop, &targets, on_event))
             })
             .collect();
         handles.into_iter().map(|h| h.join().expect("source thread panicked")).collect()
@@ -375,6 +400,7 @@ fn shoot_source(
     index: usize,
     src: &SourceSpec,
     vs: &mut AnySource,
+    crop: crate::crop::Crop,
     targets: &[(i32, i32, f64)],
     on_event: &(dyn Fn(Event) + Sync),
 ) -> Result<SourceResult> {
@@ -383,6 +409,7 @@ fn shoot_source(
         matrix_override: src.matrix_override.or(spec.convert.matrix_override),
         full_range_override: src.full_range_override.or(spec.convert.full_range_override),
         sar_override: src.sar_override.or(spec.convert.sar_override),
+        crop: Some(crop),
         ..spec.convert.clone()
     };
     let label = file_label(&src.label);
@@ -437,6 +464,7 @@ fn shoot_source(
         matrix: color.matrix,
         matrix_guessed: color.matrix_guessed,
         full_range: color.full_range,
+        crop,
         shots,
     })
 }

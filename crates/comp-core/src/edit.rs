@@ -81,6 +81,7 @@ impl Editor {
             // Reuse exactly what the original run used, so re-shot frames match the others.
             matrix_override: Some(sr.matrix),
             full_range_override: Some(sr.full_range),
+            crop: Some(sr.crop),
             ..Default::default()
         }
     }

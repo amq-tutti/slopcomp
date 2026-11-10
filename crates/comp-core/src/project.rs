@@ -49,6 +49,9 @@ pub struct Project {
     /// Keep storage resolution for anamorphic sources.
     #[serde(default)]
     pub no_sar: bool,
+    /// Keep black borders instead of detecting and cropping them.
+    #[serde(default)]
+    pub no_crop: bool,
     #[serde(rename = "source")]
     pub sources: Vec<ProjectSource>,
 }

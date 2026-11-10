@@ -23,7 +23,7 @@ pub enum Request {
     /// Open these sources (the first is the reference). Replaces any previous set.
     Configure(Vec<SourceConfig>),
     /// Decode reference frame `ref_frame` and the matching frame of every other source.
-    Frame { ref_frame: i32, offsets: Vec<(f64, i32)>, max_width: u32, stretch: bool },
+    Frame { ref_frame: i32, offsets: Vec<(f64, i32)>, max_width: u32, stretch: bool, crop: bool },
     /// Suggest an offset for source `index` against the reference.
     Suggest { index: usize },
 }
@@ -69,6 +69,8 @@ impl Worker {
 
 fn run(rx: Receiver<Request>, tx: Sender<Reply>, repaint: impl Fn()) {
     let mut sources: Vec<(SourceConfig, AnySource)> = Vec::new();
+    // Detected black borders per source config (computed on first use).
+    let mut crops: Vec<(SourceConfig, comp_core::crop::Crop)> = Vec::new();
     let send = |r: Reply| {
         let _ = tx.send(r);
         repaint();
@@ -151,7 +153,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Reply>, repaint: impl Fn()) {
             }
         }
 
-        if let Some(Request::Frame { ref_frame, offsets, max_width, stretch }) = frame {
+        if let Some(Request::Frame { ref_frame, offsets, max_width, stretch, crop }) = frame {
             if sources.is_empty() {
                 continue;
             }
@@ -165,9 +167,24 @@ fn run(rx: Receiver<Request>, tx: Sender<Reply>, repaint: impl Fn()) {
                     let n = src.info().num_frames;
                     src.frame_at_time(t + os).map(|f| f + of).filter(|f| (0..n).contains(f))
                 };
+                let c = if crop {
+                    match crops.iter().find(|(cc, _)| cc == cfg) {
+                        Some((_, c)) => Some(*c),
+                        None => {
+                            send(Reply::Status("Detecting black borders…".into()));
+                            let n = src.info().num_frames;
+                            let c = comp_core::crop::detect(src, 0, n, 24).unwrap_or_default();
+                            crops.push((cfg.clone(), c));
+                            send(Reply::Status(String::new()));
+                            Some(c)
+                        }
+                    }
+                } else {
+                    None
+                };
                 images.push(match target {
                     None => Err("no frame at this time (outside the source)".to_string()),
-                    Some(f) => decode(src, cfg, f, max_width, stretch),
+                    Some(f) => decode(src, cfg, f, max_width, stretch, c),
                 });
             }
             send(Reply::Images { ref_frame, images });
@@ -186,11 +203,18 @@ fn run(rx: Receiver<Request>, tx: Sender<Reply>, repaint: impl Fn()) {
     }
 }
 
-fn decode(src: &mut AnySource, cfg: &SourceConfig, n: i32, max_width: u32, stretch: bool) -> Result<PreviewImage, String> {
+fn decode(
+    src: &mut AnySource,
+    cfg: &SourceConfig,
+    n: i32,
+    max_width: u32,
+    stretch: bool,
+    crop: Option<comp_core::crop::Crop>,
+) -> Result<PreviewImage, String> {
     let sar = src.info().sar;
     let frame = src.frame(n).map_err(|e| e.to_string())?;
     let pict_type = frame.pict_type;
-    let conv = ConvertOptions { apply_sar: stretch, matrix_override: cfg.matrix, ..Default::default() };
+    let conv = ConvertOptions { apply_sar: stretch, matrix_override: cfg.matrix, crop, ..Default::default() };
     let img = convert::to_rgb(&frame, sar, &conv).map_err(|e| e.to_string())?;
     let native = (img.width, img.height);
     let (w, h, rgb) = downscale(img.width as usize, img.height as usize, &img.data, max_width as usize);

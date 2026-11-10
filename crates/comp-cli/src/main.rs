@@ -178,6 +178,9 @@ enum Cmd {
         /// Keep storage resolution for anamorphic sources.
         #[arg(long)]
         no_sar: bool,
+        /// Keep black borders (pillarbox/letterbox) instead of detecting and cropping them.
+        #[arg(long)]
+        no_crop: bool,
     },
 }
 
@@ -356,7 +359,7 @@ fn main() -> Result<()> {
             let ivtc = field(|s| &s.ivtc);
             let deint = field(|s| &s.deint);
             let matrices = p.sources.iter().filter_map(|s| s.matrix.clone().map(|m| (s.label.clone(), m))).collect();
-            run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, select, false, false)?;
+            run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, p.no_crop, select, false, false)?;
         }
         Cmd::Sync { sources, ivtc, deint, start, len, search } => {
             let paths: Vec<PathBuf> = sources.iter().map(|(_, p)| PathBuf::from(p)).collect();
@@ -449,6 +452,7 @@ fn main() -> Result<()> {
             name,
             out,
             no_sar,
+            no_crop,
         } => {
             let mut select = SelectOptions { exclude_chapter_op_ed: exclude_op_ed, ..Default::default() };
             if skip_duplicates {
@@ -489,6 +493,7 @@ fn main() -> Result<()> {
                         flat: select.flat_threshold.is_some(),
                     },
                     no_sar,
+                    no_crop,
                     sources: sources
                         .iter()
                         .map(|(l, p)| {
@@ -513,7 +518,7 @@ fn main() -> Result<()> {
                 project.save(file)?;
                 eprintln!("saved project to {}", file.display());
             }
-            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar, select, open, open_slowpics)?;
+            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar, no_crop, select, open, open_slowpics)?;
         }
     }
     Ok(())
@@ -532,6 +537,7 @@ fn run_comp(
     name: Option<String>,
     out: PathBuf,
     no_sar: bool,
+    no_crop: bool,
     select: SelectOptions,
     open: bool,
     open_slowpics: bool,
@@ -565,6 +571,9 @@ fn run_comp(
     for (label, v) in &matrices {
         let i = find(&mut specs, label)?;
         specs[i].matrix_override = Some(parse_matrix(v)?);
+    }
+    for s in &mut specs {
+        s.auto_crop = !no_crop;
     }
 
     let pick = if explicit.is_empty() {
@@ -683,6 +692,10 @@ impl Printer {
                 info.sar.1,
                 info.container,
                 info.seek_mode
+            ),
+            Event::Cropped { source, crop } if !crop.is_none() => eprintln!(
+                "  cropping {:<12} left {} top {} right {} bottom {}",
+                labels[source], crop.left, crop.top, crop.right, crop.bottom
             ),
             Event::Excluded { ranges } => {
                 for (a, b, why) in ranges {
