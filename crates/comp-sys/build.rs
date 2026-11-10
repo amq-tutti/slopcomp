@@ -17,6 +17,7 @@ fn main() {
     // canonicalize() yields \\?\C:\... on Windows, which clang and the linker don't handle well.
     let prefix = PathBuf::from(prefix.to_string_lossy().trim_start_matches(r"\\?\").to_string());
     println!("cargo:rerun-if-env-changed=ANIME_COMP_DEPS");
+    println!("cargo:rerun-if-env-changed=COMP_STATIC_STDCXX");
     println!("cargo:rerun-if-changed={}", prefix.join("lib").display());
     println!("cargo:rerun-if-changed=wrapper.h");
 
@@ -79,7 +80,22 @@ fn link(prefix: &PathBuf, target_os: &str) {
                 println!("cargo:rustc-link-lib={l}");
             }
         }
-        _ => println!("cargo:rustc-link-lib=stdc++"),
+        _ => {
+            // COMP_STATIC_STDCXX=1 links libstdc++ statically (portable Linux release builds).
+            if env::var("COMP_STATIC_STDCXX").is_ok_and(|v| v == "1") {
+                // libstdc++.a usually lives in the compiler's private lib dir (e.g. gcc-toolset).
+                let cxx = env::var("CXX").unwrap_or_else(|_| "c++".into());
+                if let Ok(out) = Command::new(&cxx).arg("-print-file-name=libstdc++.a").output() {
+                    let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+                    if p.is_absolute() && p.exists() {
+                        println!("cargo:rustc-link-search=native={}", p.parent().unwrap().display());
+                    }
+                }
+                println!("cargo:rustc-link-lib=static=stdc++");
+            } else {
+                println!("cargo:rustc-link-lib=stdc++");
+            }
+        }
     }
 }
 

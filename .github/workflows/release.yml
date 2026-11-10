@@ -1,0 +1,134 @@
+name: Release
+
+# Push a tag like v0.1.0 to build all platforms and attach the artifacts to a draft release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS arm64
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install autoconf automake libtool meson ninja nasm pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        id: deps
+        with:
+          path: deps/prefix
+          key: deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deps/build.sh') }}
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: deps/build.sh
+      - run: packaging/notices.sh
+      - run: packaging/macos/bundle.sh
+
+      # Optional: Developer ID signing + notarization. Needs these repository secrets:
+      # MACOS_CERT_P12 (base64 .p12), MACOS_CERT_PASSWORD, MACOS_SIGN_IDENTITY
+      # ("Developer ID Application: Name (TEAMID)"), APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD.
+      - name: Sign and notarize
+        if: env.MACOS_CERT_P12 != ''
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          KC=$RUNNER_TEMP/sign.keychain-db
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p ci "$KC"
+          echo "$MACOS_CERT_P12" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC"
+          security list-keychains -d user -s "$KC"
+          APP=target/release/anime-comp.app
+          for bin in "$APP/Contents/MacOS/comp" "$APP/Contents/MacOS/anime-comp"; do
+            codesign --force --options runtime --timestamp -s "$MACOS_SIGN_IDENTITY" "$bin"
+          done
+          codesign --force --options runtime --timestamp -s "$MACOS_SIGN_IDENTITY" "$APP"
+          ditto -c -k --keepParent "$APP" $RUNNER_TEMP/app.zip
+          xcrun notarytool submit $RUNNER_TEMP/app.zip --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$APP"
+
+      - name: Disk image
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          STAGE=$(mktemp -d)
+          cp -R target/release/anime-comp.app LICENSE THIRD_PARTY_NOTICES.md "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname anime-comp -srcfolder "$STAGE" -ov -format UDZO "target/release/anime-comp-$VERSION-macos-arm64.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: target/release/*.dmg
+
+  linux:
+    name: Linux x64 (AppImage)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # deps/build.sh and the notices need the native deps' licence files; the Docker build
+      # produces both inside the container.
+      - run: packaging/linux/docker-build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: target/linux/*
+
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make autoconf automake libtool diffutils tar zip
+          pacboy: >-
+            toolchain:p meson:p ninja:p nasm:p pkgconf:p zlib:p clang:p rust:p python:p
+      - uses: actions/cache@v4
+        id: deps
+        with:
+          path: deps/prefix
+          key: deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deps/build.sh') }}
+      - if: steps.deps.outputs.cache-hit != 'true'
+        run: deps/build.sh
+      - run: packaging/notices.sh
+      - run: packaging/windows/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/release/*.zip
+
+  release:
+    name: Draft release
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*

@@ -21,6 +21,17 @@ cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → tar
 
 Drop files or episode folders onto the window, check alignment in **Sync** (offsets per source, flicker), then **Run**. Setups save as TOML projects that the CLI can also run (`comp project file.toml`), and `anime-comp file.toml` opens one directly.
 
+## Packaging
+
+```bash
+packaging/macos/bundle.sh --dmg      # macOS: target/release/anime-comp.app + .dmg
+packaging/linux/docker-build.sh      # Linux AppImage + CLI tarball in manylinux_2_28 (Docker) → target/linux/
+packaging/windows/package.sh         # Windows (MSYS2 UCRT64): zip, fails on non-system DLL imports
+packaging/notices.sh                 # regenerate THIRD_PARTY_NOTICES.md
+```
+
+Pushing a `v*` tag runs `.github/workflows/release.yml` (all three platforms → draft GitHub release with SHA256SUMS). macOS builds are ad-hoc signed unless the Developer ID secrets listed in the workflow are set.
+
 ## Testing
 
 ```bash

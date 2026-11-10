@@ -8,7 +8,7 @@
 #
 # Supported hosts: macOS (arm64/x86_64), Linux (x86_64), Windows via MSYS2 UCRT64 (mingw-w64).
 # Usage: deps/build.sh [--clean]
-# Env:   JOBS (parallelism), PREFIX (install dir, default deps/prefix)
+# Env:   JOBS (parallelism), PREFIX (install dir, default deps/prefix), BUILD (scratch dir, default deps/build)
 set -euo pipefail
 
 DAV1D_VER=1.5.1
@@ -22,7 +22,7 @@ FFMS2_SHA256=7770af0bbc0063f9580a6a5c8e7c51f1788f171d7da0b352e48a1e60943a8c3c
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$ROOT/src"
-BUILD="$ROOT/build"
+BUILD="${BUILD:-$ROOT/build}"
 PREFIX="${PREFIX:-$ROOT/prefix}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 
@@ -141,5 +141,15 @@ if ! stamp ffms2-$FFMS2_VER; then
     make -j"$JOBS" && make install)
   mark ffms2-$FFMS2_VER
 fi
+
+# Licence texts travel with the prefix (CI caches only the prefix; packaging/notices.sh reads these).
+mkdir -p "$PREFIX/share/licenses"
+for pair in "ffmpeg:LICENSE.md" "ffms2:COPYING" "zimg:COPYING" "dav1d:COPYING"; do
+  lib=${pair%%:*}; file=${pair#*:}
+  if [[ -f "$BUILD/$lib/$file" ]]; then
+    mkdir -p "$PREFIX/share/licenses/$lib"
+    cp "$BUILD/$lib/$file" "$PREFIX/share/licenses/$lib/$file"
+  fi
+done
 
 echo ">> deps installed into $PREFIX"

@@ -1,3 +1,8 @@
 # Pick dependency versions compatible with the workspace's rust-version.
 [resolver]
 incompatible-rust-versions = "fallback"
+
+# Windows (MSYS2 / mingw-w64): link the C/C++ runtime, libstdc++ and winpthread statically so the
+# .exe only depends on Windows system DLLs. packaging/windows/package.sh verifies this.
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-static"]
