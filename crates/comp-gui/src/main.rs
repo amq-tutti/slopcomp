@@ -1,9 +1,10 @@
-//! anime-comp desktop app.
+//! Anime Comparisons desktop app.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod app;
 mod preview;
 mod setup;
+mod viewer;
 
 /// Window/taskbar icon (macOS uses the bundle's .icns instead).
 fn icon() -> Option<eframe::egui::IconData> {
@@ -26,11 +27,12 @@ fn main() -> eframe::Result {
     }
     let options = eframe::NativeOptions {
         viewport: viewport
-            .with_title("anime-comp")
+            .with_title("Anime Comparisons")
             .with_inner_size([1180.0, 820.0])
             .with_min_inner_size([720.0, 520.0])
             .with_drag_and_drop(true),
         ..Default::default()
     };
+    // The app id stays "anime-comp" so the saved setup (eframe storage) carries over.
     eframe::run_native("anime-comp", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
 }

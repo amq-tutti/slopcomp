@@ -16,6 +16,7 @@ use comp_core::comp::{self, CompSpec, Event, FramePick, SelectOptions, SourceSpe
 use comp_core::convert::{self, ConvertOptions};
 use comp_core::filter::{AnySource, FieldMode, FieldOptions, FieldOrder, FilteredSource};
 use comp_core::sync::{suggest_offset, SyncOptions};
+use comp_core::edit::Editor;
 use comp_core::pairing;
 use comp_core::season::{self, SeasonEvent};
 use comp_core::project::{FrameTypeRule, Project, ProjectSource, Rules};
@@ -44,6 +45,35 @@ enum Cmd {
         /// Keep storage resolution for anamorphic sources instead of stretching to display aspect.
         #[arg(long)]
         no_sar: bool,
+    },
+    /// Correct frames of an existing comparison (re-shoots PNGs, updates comp.json and the viewer).
+    ///
+    ///   comp fix DIR --frame 12713 --source DVD --nudge -1
+    ///   comp fix DIR --frame 12713 --source DVD --set 12169
+    ///   comp fix DIR --frame 12713 --replace         # swap for a random nearby frame
+    ///   comp fix DIR --frame 12713 --replace-with 12900
+    Fix {
+        dir: PathBuf,
+        /// Comparison frame (reference frame number, as in the file names).
+        #[arg(long)]
+        frame: i32,
+        /// Source label (for --nudge / --set).
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        nudge: Option<i32>,
+        #[arg(long)]
+        set: Option<i32>,
+        #[arg(long)]
+        replace: bool,
+        #[arg(long)]
+        replace_with: Option<i32>,
+    },
+    /// Regenerate the HTML viewer of existing comparisons from their comp.json (no decoding).
+    /// Folders without a comp.json are searched one level down (season folders).
+    Viewer {
+        #[arg(required = true)]
+        dirs: Vec<PathBuf>,
     },
     /// Run a comparison from a saved TOML project file.
     Project { file: PathBuf },
@@ -253,6 +283,50 @@ fn main() -> Result<()> {
                     if img.color.matrix_guessed { " guessed" } else { "" }
                 );
             }
+        }
+        Cmd::Fix { dir, frame, source, nudge, set, replace, replace_with } => {
+            let mut ed = Editor::open(&dir)?;
+            let labels: Vec<String> = ed.result.sources.iter().map(|s| s.label.clone()).collect();
+            let src_index = |l: &str| labels.iter().position(|x| x == l).with_context(|| format!("no source '{l}' (have: {})", labels.join(", ")));
+            if replace || replace_with.is_some() {
+                let new = match replace_with {
+                    Some(f) => f,
+                    None => ed.random_replacement(frame)?,
+                };
+                ed.replace(frame, new)?;
+                println!("frame {frame} replaced with {new}");
+            } else if let Some(d) = nudge {
+                let s = src_index(source.as_deref().context("--nudge needs --source")?)?;
+                ed.nudge(frame, s, d)?;
+                println!("{} at frame {frame}: moved {d:+}", labels[s]);
+            } else if let Some(f) = set {
+                let s = src_index(source.as_deref().context("--set needs --source")?)?;
+                ed.set_source_frame(frame, s, f)?;
+                println!("{} at frame {frame}: now source frame {f}", labels[s]);
+            } else {
+                anyhow::bail!("nothing to do: use --nudge, --set, --replace or --replace-with");
+            }
+        }
+        Cmd::Viewer { dirs } => {
+            let mut n = 0;
+            for d in &dirs {
+                let mut targets = vec![];
+                if d.join("comp.json").exists() {
+                    targets.push(d.clone());
+                } else {
+                    for e in std::fs::read_dir(d).with_context(|| format!("reading {}", d.display()))? {
+                        let p = e?.path();
+                        if p.join("comp.json").exists() {
+                            targets.push(p);
+                        }
+                    }
+                }
+                for t in targets {
+                    println!("{}", comp_core::viewer::rewrite(&t)?.display());
+                    n += 1;
+                }
+            }
+            anyhow::ensure!(n > 0, "no comp.json found");
         }
         Cmd::Project { file } => {
             let p = Project::load(&file)?;

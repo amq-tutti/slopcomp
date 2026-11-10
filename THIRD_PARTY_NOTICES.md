@@ -1,6 +1,6 @@
 # Third-party notices
 
-anime-comp is distributed under the GNU General Public License v3 (see LICENSE). It statically links the
+Anime Comparisons (anime-comp) is distributed under the GNU General Public License v3 (see LICENSE). It statically links the
 libraries below. Their licences are reproduced here.
 
 ## Native libraries

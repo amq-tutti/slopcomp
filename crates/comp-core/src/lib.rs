@@ -9,6 +9,7 @@
 pub mod chapters;
 pub mod comp;
 pub mod convert;
+pub mod edit;
 pub mod error;
 pub mod filter;
 pub mod season;

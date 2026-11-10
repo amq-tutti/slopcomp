@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::convert::{self, ConvertOptions, PngCompression};
 use crate::error::{Error, Result};
@@ -130,7 +130,7 @@ pub enum Event {
     Shot { source: usize, index: usize, path: PathBuf },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shot {
     pub reference_frame: i32,
     pub source_frame: i32,
@@ -143,7 +143,7 @@ pub struct Shot {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceResult {
     pub label: String,
     pub path: String,
@@ -167,9 +167,12 @@ pub struct SourceResult {
 }
 
 /// Everything about a finished comparison. Also written to `<out_dir>/comp.json`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompResult {
     pub name: String,
+    /// Whether anamorphic sources were stretched to display aspect (needed to re-shoot frames).
+    #[serde(default = "default_true")]
+    pub stretch_anamorphic: bool,
     pub tool_version: String,
     pub seed: Option<u64>,
     pub usable_range: (i32, i32),
@@ -183,6 +186,10 @@ pub struct CompResult {
     pub sources: Vec<SourceResult>,
     #[serde(skip)]
     pub out_dir: PathBuf,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Makes a label safe for a file name, keeping it readable ("BD Remux" → "BD_Remux").
@@ -346,6 +353,7 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
 
     let result = CompResult {
         name: spec.name.clone(),
+        stretch_anamorphic: spec.convert.apply_sar,
         tool_version: env!("CARGO_PKG_VERSION").into(),
         seed,
         usable_range: usable,
@@ -433,9 +441,49 @@ fn shoot_source(
     })
 }
 
-/// Default output directory for a comparison name: `<base>/<sanitised name>`.
+/// Default output directory for a comparison name: `<base>/<name>`, keeping the name as typed
+/// (spaces included) and only replacing characters that aren't allowed in folder names.
 pub fn default_out_dir(base: &Path, name: &str) -> PathBuf {
-    base.join(file_label(name))
+    base.join(folder_name(name))
+}
+
+/// Makes a comparison name safe as a folder name on macOS, Linux and Windows while keeping it
+/// readable: `/ \ : * ? " < > |` and control characters become `_`, and leading/trailing spaces
+/// and trailing dots (rejected by Windows) are trimmed. "To Heart 01 - BD vs DVD" stays as is.
+pub fn folder_name(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let s = s.trim().trim_end_matches(['.', ' ']).to_string();
+    // Windows reserved device names.
+    let upper = s.to_ascii_uppercase();
+    let stem = upper.split('.').next().unwrap_or("");
+    let reserved = matches!(stem, "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if s.is_empty() {
+        "comparison".into()
+    } else if reserved {
+        format!("{s}_")
+    } else {
+        s
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    #[test]
+    fn folder_names_keep_spaces() {
+        assert_eq!(folder_name("To Heart 01 - GUI test"), "To Heart 01 - GUI test");
+        assert_eq!(folder_name("[Group] Show (BD) vs. DVD"), "[Group] Show (BD) vs. DVD");
+        assert_eq!(folder_name("A/B: test?"), "A_B_ test_");
+        assert_eq!(folder_name("  trailing dots... "), "trailing dots");
+        assert_eq!(folder_name("CON"), "CON_");
+        assert_eq!(folder_name(""), "comparison");
+        assert_eq!(folder_name("ショー 01"), "ショー 01");
+    }
 }
 
 /// True if frame durations vary by more than 2 ms (beyond timestamp rounding).

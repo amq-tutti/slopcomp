@@ -20,6 +20,6 @@ docker run --rm -v "$ROOT":/src -v anime-comp-linux-work:/work -v "$ROOT/target/
   PREFIX=/work/prefix BUILD=/work/build deps/build.sh > /work/deps.log 2>&1 || { tail -40 /work/deps.log; exit 1; }
   ANIME_COMP_DEPS=/work/prefix packaging/notices.sh
   ANIME_COMP_DEPS=/work/prefix CARGO_TARGET_DIR=/work/target packaging/linux/appimage.sh
-  cp /work/target/release/anime-comp-*.AppImage /work/target/release/comp-*.tar.gz /out/
+  cp /work/target/release/Anime-Comparisons-*.AppImage /work/target/release/comp-*.tar.gz /out/
 '
 ls -la "$ROOT/target/linux"

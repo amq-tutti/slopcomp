@@ -4,7 +4,7 @@
 //! 1. A reference per-frame MD5 list comes from the system `ffmpeg -f framemd5`, an independent
 //!    build and decoder.
 //! 2. Our ffms2 source is read sequentially, and every frame must match the reference.
-//! 3. A fresh source is read in seeded random order, and every frame must still match.
+//! 3. A fresh source is read in seeded random order (300 frames per clip), and every frame must still match.
 //!
 //! If the corpus or system ffmpeg is missing, the test is skipped with a message.
 
@@ -28,6 +28,10 @@ fn corpus_files() -> Vec<PathBuf> {
     let mut v: Vec<_> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.is_file() && !p.extension().is_some_and(|e| e == "ffindex"))
+        // The long scene-cut clips exist for the offset tests (tests/sync.rs). Their codecs and
+        // containers are already covered here by shorter clips, and seeking randomly through a
+        // 1500-frame linear-seek MPEG-PS clip would dominate the test time.
+        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("cuts_")))
         .collect();
     v.sort();
     v
@@ -103,8 +107,11 @@ fn seeking_is_frame_exact() {
 
         // Random-access pass on a fresh source (seeded, all frames in shuffled order).
         let mut src = VideoSource::open(path, &opts).unwrap();
+        // Shuffled random access over (up to) 300 frames: enough to catch off-by-one seeking on
+        // every clip, without re-decoding linear-seek MPEG-PS clips from the start thousands of times.
         let mut order: Vec<usize> = (0..n).collect();
         order.shuffle(&mut rand_chacha::ChaCha8Rng::seed_from_u64(0xC0FFEE));
+        order.truncate(300);
         let mut rnd_bad = Vec::new();
         for &i in &order {
             let f = src.frame(i as i32).unwrap();

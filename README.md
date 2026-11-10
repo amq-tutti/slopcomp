@@ -1,4 +1,4 @@
-# anime-comp
+# Anime Comparisons
 
 Frame-exact anime source comparisons (WEB-DL vs BD vs encodes vs DVD), with lossless PNG screenshots and slow.pics upload.
 Native Rust app with statically linked ffmpeg/ffms2/zimg. See [PLAN.md](PLAN.md) for the architecture and roadmap.
@@ -16,15 +16,17 @@ On Windows, build inside MSYS2 UCRT64 (see `.github/workflows/ci.yml`).
 ## Desktop app
 
 ```bash
-cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → target/release/anime-comp.app
+cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → "target/release/Anime Comparisons.app"
 ```
 
-Drop files or episode folders onto the window, check alignment in **Sync** (offsets per source, flicker), then **Run**. Setups save as TOML projects that the CLI can also run (`comp project file.toml`), and `anime-comp file.toml` opens one directly.
+Drop files or episode folders onto the window, check alignment in **Sync** (offsets per source, flicker), then **Run**.
+**Viewer** shows any comparison (side by side, slider, flicker, synced zoom) and lets you fix odd frames by hand:
+move a source ±1 frame or to an exact frame, or replace the frame. The PNGs, `comp.json` and `index.html` update immediately. Setups save as TOML projects that the CLI can also run (`comp project file.toml`), and `anime-comp file.toml` opens one directly.
 
 ## Packaging
 
 ```bash
-packaging/macos/bundle.sh --dmg      # macOS: target/release/anime-comp.app + .dmg
+packaging/macos/bundle.sh --dmg      # macOS: "target/release/Anime Comparisons.app" + .dmg
 packaging/linux/docker-build.sh      # Linux AppImage + CLI tarball in manylinux_2_28 (Docker) → target/linux/
 packaging/windows/package.sh         # Windows (MSYS2 UCRT64): zip, fails on non-system DLL imports
 packaging/notices.sh                 # regenerate THIRD_PARTY_NOTICES.md
@@ -36,7 +38,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml` (all three platforms →
 
 ```bash
 testdata/make_corpus.sh       # synthetic clips (needs system ffmpeg with x264/x265/svt-av1/vpx)
-cargo test --release -- --nocapture --test-threads=1
+cargo test --release
 ```
 
 The seek-accuracy test checks every frame of every clip, read straight through and in random
@@ -52,6 +54,9 @@ comp sync -s BD=/bd/ep01.mkv -s DVD=/dvd/ep01.mkv   # suggest offsets (scene cut
 comp run  -s BD=/bd/ep01.mkv -s DVD=/dvd/ep01.mkv -n 20 --seed 1
 comp run  -s BD=/bd/folder -s DVD=/dvd/folder   # whole season, one comparison per episode
 comp project setup.toml                         # run a saved project (see --save-project)
+comp viewer comps/<name>                        # refresh index.html of existing comparisons (no decoding)
+comp fix "comps/<name>" --frame 12713 --source DVD --nudge -1   # re-shoot one source's frame
+comp fix "comps/<name>" --frame 12713 --replace                 # swap for a random nearby frame
 ```
 
 Useful `run` options:

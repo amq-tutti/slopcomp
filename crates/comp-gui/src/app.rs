@@ -18,6 +18,7 @@ enum Tab {
     Sources,
     Sync,
     Run,
+    Viewer,
 }
 
 struct SyncState {
@@ -72,6 +73,9 @@ pub struct App {
     project_path: Option<PathBuf>,
     /// Developer flag --auto-sync: request offset suggestions once the sync sources are open.
     auto_sync: bool,
+    viewer: crate::viewer::Viewer,
+    /// Comparison folders from this session (newest last), for the viewer's picker.
+    recent: Vec<PathBuf>,
 }
 
 const STORAGE_KEY: &str = "setup";
@@ -94,6 +98,7 @@ impl App {
         let tab = match args.iter().find_map(|a| a.strip_prefix("--tab=")) {
             Some("sync") => Tab::Sync,
             Some("run") => Tab::Run,
+            Some("viewer") => Tab::Viewer,
             _ => Tab::Sources,
         };
         let autostart = args.iter().any(|a| a == "--start");
@@ -119,8 +124,17 @@ impl App {
             toast: None,
             project_path,
             auto_sync: args.iter().any(|a| a == "--auto-sync"),
+            viewer: crate::viewer::Viewer::new(&cc.egui_ctx),
+            recent: Vec::new(),
         };
+
         app.tab = tab;
+        // Developer flag --view=DIR: open a comparison in the viewer.
+        if let Some(d) = args.iter().find_map(|a| a.strip_prefix("--view=")) {
+            app.viewer.open(Path::new(d));
+            app.recent.push(PathBuf::from(d));
+            app.tab = Tab::Viewer;
+        }
         if autostart && app.setup.problems().is_empty() {
             app.start_run(&cc.egui_ctx);
         }
@@ -172,8 +186,8 @@ impl App {
         let path = match (&self.project_path, ask) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
-                .add_filter("anime-comp project", &["toml"])
-                .set_file_name(format!("{}.toml", comp_core::comp::file_label(&self.setup.display_name())))
+                .add_filter("Anime Comparisons project", &["toml"])
+                .set_file_name(format!("{}.toml", comp_core::comp::folder_name(&self.setup.display_name())))
                 .save_file(),
         };
         if let Some(p) = path {
@@ -188,7 +202,7 @@ impl App {
     }
 
     fn open_project(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("anime-comp project", &["toml"]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter("Anime Comparisons project", &["toml"]).pick_file() {
             match Project::load(&p).map_err(|e| e.to_string()).and_then(|pr| Setup::from_project(&pr)) {
                 Ok(s) => {
                     self.setup = s;
@@ -301,6 +315,9 @@ impl App {
                     },
                     SeasonEvent::EpisodeDone { result, .. } => {
                         run.log.push(format!("done: {}", result.out_dir.display()));
+                        if !self.recent.contains(&result.out_dir) {
+                            self.recent.push(result.out_dir.clone());
+                        }
                         run.results.push(*result);
                     }
                     SeasonEvent::EpisodeFailed { episode, error, .. } => {
@@ -355,10 +372,10 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.heading("anime-comp");
+                ui.heading("Anime Comparisons");
                 ui.add_space(12.0);
                 let running = self.running();
-                for (tab, name) in [(Tab::Sources, "1  Sources"), (Tab::Sync, "2  Sync"), (Tab::Run, "3  Run")] {
+                for (tab, name) in [(Tab::Sources, "1  Sources"), (Tab::Sync, "2  Sync"), (Tab::Run, "3  Run"), (Tab::Viewer, "4  Viewer")] {
                     let enabled = !(running && tab != Tab::Run);
                     if ui.add_enabled(enabled, egui::SelectableLabel::new(self.tab == tab, name)).clicked() {
                         self.tab = tab;
@@ -397,6 +414,10 @@ impl eframe::App for App {
             Tab::Sources => self.ui_sources(ui, ctx),
             Tab::Sync => self.ui_sync(ui, ctx),
             Tab::Run => self.ui_run(ui, ctx),
+            Tab::Viewer => {
+                let recent = self.recent.clone();
+                self.viewer.ui(ui, ctx, &recent);
+            }
         });
     }
 }
@@ -1013,9 +1034,15 @@ impl App {
             Some(Ok(())) => {
                 ui.add_space(8.0);
                 ui.heading(format!("Done: {} comparison{}", run.results.len(), if run.results.len() == 1 { "" } else { "s" }));
+                let mut view: Option<PathBuf> = None;
                 ui.horizontal(|ui| {
+                    if let Some(first) = run.results.first() {
+                        if ui.button(RichText::new("Open in viewer").strong()).on_hover_text("View and adjust frames in the app").clicked() {
+                            view = Some(first.out_dir.clone());
+                        }
+                    }
                     if let Some(idx) = &run.index {
-                        if ui.button(RichText::new("Open viewer").strong()).clicked() {
+                        if ui.button("Open HTML viewer").clicked() {
                             open_external(idx);
                         }
                         if let Some(dir) = idx.parent() {
@@ -1038,7 +1065,10 @@ impl App {
                         for r in &run.results {
                             ui.label(&r.name);
                             ui.label(format!("{} frames", r.frames.len()));
-                            if ui.small_button("Viewer").clicked() {
+                            if ui.small_button("View").clicked() {
+                                view = Some(r.out_dir.clone());
+                            }
+                            if ui.small_button("HTML").clicked() {
                                 open_external(&r.out_dir.join("index.html"));
                             }
                             ui.end_row();
@@ -1047,6 +1077,10 @@ impl App {
                 }
                 for (ep, e) in &run.failed {
                     ui.colored_label(Color32::from_rgb(220, 80, 80), format!("{ep}: {e}"));
+                }
+                if let Some(d) = view {
+                    self.viewer.open(&d);
+                    self.tab = Tab::Viewer;
                 }
             }
             Some(Err(e)) => {

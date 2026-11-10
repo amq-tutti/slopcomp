@@ -11,7 +11,7 @@ lic() { if [[ -f "$P/$1/$2" ]]; then cat "$P/$1/$2"; else cat "deps/build/$1/$2"
 {
   echo "# Third-party notices"
   echo
-  echo "anime-comp is distributed under the GNU General Public License v3 (see LICENSE). It statically links the"
+  echo "Anime Comparisons (anime-comp) is distributed under the GNU General Public License v3 (see LICENSE). It statically links the"
   echo "libraries below. Their licences are reproduced here."
   echo
   echo "## Native libraries"

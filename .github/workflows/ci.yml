@@ -81,7 +81,7 @@ jobs:
         run: cargo build --workspace --release
 
       - name: Test (frame accuracy, colour conversion)
-        run: cargo test --workspace --release -- --nocapture --test-threads=1
+        run: cargo test --workspace --release
 
       - name: CLI smoke test
         run: |

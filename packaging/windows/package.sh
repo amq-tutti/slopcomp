@@ -17,10 +17,10 @@ for exe in anime-comp.exe comp.exe; do
   done
 done
 [[ $bad == 0 ]] || { echo "error: non-system DLL dependencies (static linking incomplete)"; exit 1; }
-STAGE=$(mktemp -d)/anime-comp-$VERSION
+STAGE="$(mktemp -d)/Anime Comparisons $VERSION"
 mkdir -p "$STAGE"
 cp "$REL/anime-comp.exe" "$REL/comp.exe" LICENSE THIRD_PARTY_NOTICES.md "$STAGE/"
-ZIP="$ROOT/$REL/anime-comp-$VERSION-windows-x64.zip"
+ZIP="$ROOT/$REL/Anime-Comparisons-$VERSION-windows-x64.zip"
 rm -f "$ZIP"
 (cd "$(dirname "$STAGE")" && zip -qr "$ZIP" "$(basename "$STAGE")")
 echo "built $ZIP ($(du -h "$ZIP" | cut -f1))"

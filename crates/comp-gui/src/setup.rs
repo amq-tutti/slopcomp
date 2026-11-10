@@ -92,7 +92,7 @@ impl Default for Setup {
         Self {
             name: String::new(),
             out_dir: std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join("Pictures").join("anime-comp"))
+                .map(|h| PathBuf::from(h).join("Pictures").join("Anime Comparisons"))
                 .unwrap_or_else(|| PathBuf::from("comps"))
                 .to_string_lossy()
                 .into_owned(),

@@ -27,6 +27,18 @@ pub fn write(result: &CompResult) -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// Rewrites `<dir>/index.html` from an existing `<dir>/comp.json` (e.g. after a viewer update).
+pub fn rewrite(dir: &Path) -> Result<std::path::PathBuf> {
+    let text = std::fs::read_to_string(dir.join("comp.json"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| crate::error::Error::Spec(format!("{}: {e}", dir.display())))?;
+    let name = value.get("name").and_then(|n| n.as_str()).unwrap_or("comparison").to_string();
+    let html = TEMPLATE.replace("__TITLE__", &html_escape(&name)).replace("__DATA__", &script_json(&value));
+    let path = dir.join("index.html");
+    std::fs::write(&path, html)?;
+    Ok(path)
+}
+
 /// One episode in a season index.
 pub struct SeasonEntry {
     pub episode: String,
