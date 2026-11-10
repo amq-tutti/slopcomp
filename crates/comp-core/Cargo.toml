@@ -1,0 +1,17 @@
+[package]
+name = "comp-core"
+description = "Core library for anime-comp: frame-accurate decoding, colour conversion, frame selection, uploads"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+comp-sys = { path = "../comp-sys" }
+thiserror = "2"
+png = "0.17"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[dev-dependencies]
+md-5 = "0.10"
+rand = "0.8"
+rand_chacha = "0.3"

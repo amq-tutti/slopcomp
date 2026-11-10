@@ -1,0 +1,8 @@
+/target
+/deps/src
+/deps/build
+/deps/prefix*
+/testdata/corpus
+*.ffindex
+/out
+/deps/build.log
