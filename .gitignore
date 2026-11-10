@@ -6,3 +6,4 @@
 *.ffindex
 /out
 /deps/build.log
+/comps

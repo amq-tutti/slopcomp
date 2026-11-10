@@ -40,4 +40,9 @@ gen dvd_mpeg2.mpg -f lavfi -i "testsrc2=size=720x480:rate=30000/1001:duration=6"
 gen mpeg2_opengop.mkv "${SRC[@]}" -c:v mpeg2video -b:v 4M -g 30 -bf 3 -pix_fmt yuv420p
 gen mpeg2_ts.m2ts "${SRC[@]}" -c:v mpeg2video -b:v 4M -g 15 -bf 2 -pix_fmt yuv420p -f mpegts -mpegts_m2ts_mode 1
 gen mpeg2_es.m2v "${SRC[@]}" -c:v mpeg2video -b:v 4M -g 15 -bf 2 -pix_fmt yuv420p
+# Same content as the 640x360 clips but starting 24 frames (1.001 s) later, as a different codec:
+# exercises offsets in the comparison runner.
+gen late24_hevc.mkv -f lavfi -i "testsrc2=size=640x360:rate=24000/1001:duration=11" \
+  -vf "trim=start_frame=24:end_frame=240,setpts=PTS-STARTPTS" -c:v libx265 -preset fast -pix_fmt yuv420p \
+  -x265-params "log-level=error:keyint=48"
 echo ">> corpus ready in $OUT"

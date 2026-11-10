@@ -105,6 +105,8 @@ Sources (≥2 groups) ──► pairing ──► per-episode set
 - Pairing table: rows = episodes, columns = source groups. Missing cells are flagged, and cells can be edited by drag and drop in the GUI or by an explicit mapping in the project file.
 
 ### 4.2 Offsets
+- **Alignment is by timestamp, not by frame number (found in M1).** Real releases mix VFR and CFR. For example, a VFR BD encode (23.976 with 29.97 sections) against a CFR 23.976 DVD encode drifts by ~780 frames over an episode with no change in timing.
+  A reference frame at time `t` maps to the frame on screen at `t + offset_seconds` in each source, and then `offset_frames` is applied on top. Timestamps are normalised so each source's first frame is at 0.
 - One group is the **reference** (default: the first, usually the BD remux). Every other group has a signed frame offset `o_s`, so that source frame = reference frame + `o_s`.
 - Offsets are stored per episode, defaulting to a group-wide value. A WEB-DL often has a constant offset across a season (e.g. a 24-frame studio logo), so set it once and override only where needed.
 - **Auto-suggest:**
@@ -220,7 +222,7 @@ Licence: ship `LICENSE` (GPLv3) and the third-party notices for ffmpeg, ffms2, z
 | M3 | **slow.pics upload** | Anonymous upload creates a working comparison, with retries and a cap. `comp upload` works on existing output. Limits are documented. |
 | M4 | **GUI** | Sources → Pairing → Sync (manual offset) → Settings → Run → Results → Upload, all working end to end. |
 | M5 | **Auto-suggest offsets** | Correct offset found on test pairs (WEB vs BD with a logo offset, DVD vs BD at different resolutions), with a confidence score that clearly flags wrong matches. Cross-episode OP/ED repeat detection (it reuses the same pHash sequences). |
-| M6 | **IVTC / deinterlace** | A telecined NTSC DVD source produces clean progressive frames. Output-timeline frame N is deterministic (windowed result = sequential result) and is cached. |
+| M6 | **IVTC / deinterlace** (*priority: real BD sources are often 1080i telecined, e.g. To Heart*) | A telecined NTSC DVD source produces clean progressive frames. Output-timeline frame N is deterministic (windowed result = sequential result) and is cached. |
 | M7 | **Packaging + release** | Signed .app/.dmg, Windows zip, AppImage built from a tag, each tested on a clean machine or VM. |
 
 M5 and M6 are independent of M4 and can be built in parallel once M2 lands.

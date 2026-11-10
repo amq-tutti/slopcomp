@@ -326,3 +326,63 @@ pub fn write_png(img: &RgbImage, path: &Path, compression: PngCompression) -> Re
     w.finish()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unspecified() -> ColorInfo {
+        ColorInfo { matrix: 2, transfer: 2, primaries: 2, range: 0, chroma_location: 0 }
+    }
+
+    #[test]
+    fn matrix_fallbacks_by_resolution() {
+        let o = ConvertOptions::default();
+        let c = unspecified();
+        assert_eq!(resolve_color(&c, 1920, 1080, false, &o).matrix, sys::ZIMG_MATRIX_BT709 as i32);
+        assert_eq!(resolve_color(&c, 1420, 1080, false, &o).matrix, sys::ZIMG_MATRIX_BT709 as i32);
+        assert_eq!(resolve_color(&c, 720, 480, false, &o).matrix, sys::ZIMG_MATRIX_ST170_M as i32);
+        assert_eq!(resolve_color(&c, 700, 478, false, &o).matrix, sys::ZIMG_MATRIX_ST170_M as i32);
+        assert_eq!(resolve_color(&c, 720, 576, false, &o).matrix, sys::ZIMG_MATRIX_BT470_BG as i32);
+        assert!(resolve_color(&c, 720, 480, false, &o).matrix_guessed);
+    }
+
+    #[test]
+    fn tagged_metadata_and_overrides_win() {
+        let mut c = unspecified();
+        c.matrix = 1; // BT.709 tagged on an SD stream
+        let r = resolve_color(&c, 720, 480, false, &ConvertOptions::default());
+        assert_eq!((r.matrix, r.matrix_guessed), (1, false));
+        let o = ConvertOptions { matrix_override: Some(6), full_range_override: Some(true), ..Default::default() };
+        let r = resolve_color(&c, 720, 480, false, &o);
+        assert_eq!((r.matrix, r.full_range), (6, true));
+    }
+
+    #[test]
+    fn range_and_chroma_location() {
+        let o = ConvertOptions::default();
+        let mut c = unspecified();
+        assert!(!resolve_color(&c, 1920, 1080, false, &o).full_range);
+        assert!(resolve_color(&c, 1920, 1080, true, &o).full_range, "yuvj formats default to full range");
+        c.range = 2;
+        assert!(resolve_color(&c, 1920, 1080, false, &o).full_range);
+        c.chroma_location = 3; // AVCHROMA_LOC_TOPLEFT (BT.2020/UHD)
+        assert_eq!(resolve_color(&c, 1920, 1080, false, &o).chroma_location, sys::ZIMG_CHROMA_TOP_LEFT as i32);
+        c.chroma_location = 0;
+        assert_eq!(resolve_color(&c, 1920, 1080, false, &o).chroma_location, sys::ZIMG_CHROMA_LEFT as i32);
+    }
+
+    #[test]
+    fn anamorphic_width() {
+        let on = ConvertOptions { apply_sar: true, ..Default::default() };
+        assert_eq!(output_width(720, (32, 27), &on), 853); // NTSC 16:9
+        assert_eq!(output_width(720, (8, 9), &on), 640); // NTSC 4:3
+        assert_eq!(output_width(700, (10, 11), &on), 636); // cropped NTSC 4:3 encode
+        assert_eq!(output_width(720, (16, 15), &on), 768); // PAL 4:3
+        assert_eq!(output_width(1920, (1, 1), &on), 1920);
+        assert_eq!(output_width(1920, (0, 0), &on), 1920);
+        assert_eq!(output_width(720, (32, 27), &ConvertOptions::default()), 720);
+        let ov = ConvertOptions { apply_sar: true, sar_override: Some((1, 1)), ..Default::default() };
+        assert_eq!(output_width(720, (32, 27), &ov), 720);
+    }
+}

@@ -14,6 +14,8 @@ pub enum Error {
     NoVideoTrack(PathBuf),
     #[error("path is not valid UTF-8 / contains NUL: {0}")]
     BadPath(PathBuf),
+    #[error("{0}")]
+    Spec(String),
     #[error("png: {0}")]
     Png(#[from] png::EncodingError),
     #[error(transparent)]

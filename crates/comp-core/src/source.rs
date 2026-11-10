@@ -268,6 +268,8 @@ pub struct VideoSource {
     path: PathBuf,
     vs: *mut sys::FFMS_VideoSource,
     info: VideoInfo,
+    /// Presentation time of every frame in seconds, relative to the first frame.
+    times: Vec<f64>,
     err: ErrInfo,
 }
 
@@ -394,7 +396,8 @@ impl VideoSource {
             layout,
             color: color_of(f0),
         };
-        Ok(Self { path: path.to_owned(), vs, info, err })
+        let times = frame_times(vs, info.num_frames);
+        Ok(Self { path: path.to_owned(), vs, info, times, err })
     }
 
     pub fn path(&self) -> &Path {
@@ -403,6 +406,18 @@ impl VideoSource {
 
     pub fn info(&self) -> &VideoInfo {
         &self.info
+    }
+
+    /// Presentation time of every frame in seconds, relative to the first frame (ascending).
+    pub fn times(&self) -> &[f64] {
+        &self.times
+    }
+
+    /// The frame on screen at time `t` (seconds, relative to the first frame): the last frame
+    /// whose timestamp is ≤ `t`, with 1 ms of tolerance for timestamp rounding. Returns `None`
+    /// before the first frame or after the last frame's display interval.
+    pub fn frame_at_time(&self, t: f64) -> Option<i32> {
+        frame_at_time(&self.times, t)
     }
 
     /// Picture type of frame `n` without returning pixel data ('?' if unknown).
@@ -446,6 +461,37 @@ impl VideoSource {
     }
 }
 
+/// Reads per-frame timestamps from the ffms2 track and normalises them to start at 0.
+fn frame_times(vs: *mut sys::FFMS_VideoSource, n: i32) -> Vec<f64> {
+    unsafe {
+        let track = sys::FFMS_GetTrackFromVideo(vs);
+        let tb = &*sys::FFMS_GetTimeBase(track);
+        // ffms2 timebase is in milliseconds: ms = PTS * Num / Den.
+        let scale = tb.Num as f64 / tb.Den as f64 / 1000.0;
+        let mut v: Vec<f64> = (0..n).map(|i| (*sys::FFMS_GetFrameInfo(track, i)).PTS as f64 * scale).collect();
+        if let Some(&t0) = v.first() {
+            v.iter_mut().for_each(|t| *t -= t0);
+        }
+        v
+    }
+}
+
+/// See [`VideoSource::frame_at_time`].
+pub fn frame_at_time(times: &[f64], t: f64) -> Option<i32> {
+    const EPS: f64 = 0.001;
+    let n = times.len();
+    if n == 0 || t < -EPS {
+        return None;
+    }
+    // Typical frame duration, used to bound the last frame's display interval.
+    let last_dur = if n >= 2 { times[n - 1] - times[n - 2] } else { 0.05 };
+    if t > times[n - 1] + last_dur - EPS {
+        return None;
+    }
+    let idx = times.partition_point(|&x| x <= t + EPS);
+    Some(idx.saturating_sub(1) as i32)
+}
+
 fn color_of(f: &sys::FFMS_Frame) -> ColorInfo {
     ColorInfo {
         matrix: f.ColorSpace,
@@ -459,5 +505,23 @@ fn color_of(f: &sys::FFMS_Frame) -> ColorInfo {
 impl Drop for VideoSource {
     fn drop(&mut self) {
         unsafe { sys::FFMS_DestroyVideoSource(self.vs) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frame_at_time;
+
+    #[test]
+    fn time_lookup() {
+        // 3 frames at 24 fps, then 2 at 30 fps.
+        let t = [0.0, 1.0 / 24.0, 2.0 / 24.0, 3.0 / 24.0, 3.0 / 24.0 + 1.0 / 30.0];
+        assert_eq!(frame_at_time(&t, 0.0), Some(0));
+        assert_eq!(frame_at_time(&t, 0.04), Some(0));
+        assert_eq!(frame_at_time(&t, 1.0 / 24.0 - 0.0005), Some(1)); // rounding tolerance
+        assert_eq!(frame_at_time(&t, 0.13), Some(3));
+        assert_eq!(frame_at_time(&t, 0.16), Some(4));
+        assert_eq!(frame_at_time(&t, 0.5), None);
+        assert_eq!(frame_at_time(&t, -0.1), None);
     }
 }
