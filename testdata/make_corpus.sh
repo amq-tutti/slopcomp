@@ -57,4 +57,10 @@ gen ivtc_telecined_h264.m2ts "${TC_SRC[@]}" -vf "$TC_FILTER" -c:v libx264 -prese
   -x264-params "tff=1:keyint=30:bframes=3" -field_order tt -f mpegts -mpegts_m2ts_mode 1
 gen ivtc_telecined_dvd.mpg "${TC_SRC[@]}" -vf "$TC_FILTER" -c:v mpeg2video -b:v 8M -g 15 -bf 2 -flags +ildct+ilme -alternate_scan 1 \
   -field_order tt -f vob
+# Scene cuts and black screens for the frame-picking rules: 4 s pattern A, 2 s black, 4 s pattern B,
+# hard cuts between them (frames 0-95 A, 96-143 black, 144-239 B at 23.976).
+gen cuts_black.mkv -f lavfi -i "testsrc2=size=640x360:rate=24000/1001:duration=4.004" \
+  -f lavfi -i "color=black:size=640x360:rate=24000/1001:duration=2.002" \
+  -f lavfi -i "mandelbrot=size=640x360:rate=24000/1001,trim=end_frame=96" \
+  -filter_complex "[0][1][2]concat=n=3:v=1,format=yuv420p" -c:v libx264 -preset fast -crf 16 -x264-params keyint=48
 echo ">> corpus ready in $OUT"

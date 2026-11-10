@@ -716,6 +716,22 @@ impl AnySource {
             AnySource::Filtered(s) => s.times(),
         }
     }
+    /// Absolute container time of the (underlying) first frame, in seconds.
+    pub fn start_time(&self) -> f64 {
+        match self {
+            AnySource::Plain(s) => s.start_time(),
+            AnySource::Filtered(s) => s.inner().start_time(),
+        }
+    }
+    pub fn path(&self) -> &Path {
+        match self {
+            AnySource::Plain(s) => s.path(),
+            AnySource::Filtered(s) => s.inner().path(),
+        }
+    }
+    pub fn is_filtered(&self) -> bool {
+        matches!(self, AnySource::Filtered(_))
+    }
     pub fn frame_at_time(&self, t: f64) -> Option<i32> {
         match self {
             AnySource::Plain(s) => s.frame_at_time(t),

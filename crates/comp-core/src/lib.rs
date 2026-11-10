@@ -6,11 +6,15 @@
 //! * [`select`] — frame selection on the reference timeline
 //! * [`comp`] — end-to-end comparison runner
 
+pub mod chapters;
 pub mod comp;
 pub mod convert;
 pub mod error;
 pub mod filter;
 pub mod select;
+pub mod pairing;
+pub mod project;
 pub mod source;
+pub mod stats;
 
 pub use error::{Error, Result};

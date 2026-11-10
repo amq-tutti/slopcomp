@@ -4,7 +4,7 @@
 //! * `shot` — frame-exact lossless PNG screenshots of one file
 //! * `run` — a comparison across several sources
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -12,9 +12,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime};
 
-use comp_core::comp::{self, CompSpec, Event, FramePick, SourceSpec};
+use comp_core::comp::{self, CompSpec, Event, FramePick, SelectOptions, SourceSpec};
 use comp_core::convert::{self, ConvertOptions};
 use comp_core::filter::{FieldMode, FieldOptions, FieldOrder};
+use comp_core::pairing;
+use comp_core::project::{FrameTypeRule, Project, ProjectSource, Rules};
 use comp_core::source::{OpenOptions, VideoSource};
 
 #[derive(Parser)]
@@ -41,12 +43,21 @@ enum Cmd {
         #[arg(long)]
         no_sar: bool,
     },
+    /// Run a comparison from a saved TOML project file.
+    Project { file: PathBuf },
+    /// Show how episodes in several folders pair up (no decoding).
+    Pair {
+        /// LABEL=FOLDER (or file), repeatable.
+        #[arg(short = 's', long = "source", required = true, value_parser = parse_kv)]
+        sources: Vec<(String, String)>,
+    },
     /// Run a comparison: same frames from every source, lossless PNGs plus comp.json.
     ///
     /// Example:
     ///   comp run -s "BD=/bd/ep01.mkv" -s "DVD=/dvd/ep01.mkv" --offset DVD=-12 --frames 20
     Run {
-        /// Source as LABEL=PATH. Repeat for each source; the first one is the reference timeline.
+        /// Source as LABEL=PATH, where PATH is a file or a folder of episodes (paired by episode
+        /// number). Repeat for each source; the first one is the reference timeline.
         #[arg(short = 's', long = "source", required = true, num_args = 1, value_parser = parse_kv)]
         sources: Vec<(String, String)>,
         /// Offset as LABEL=N (frames) or LABEL=Xs (seconds). Repeatable; frame and time offsets add up.
@@ -70,6 +81,31 @@ enum Cmd {
         /// Deinterlace every frame of a source (truly interlaced content): LABEL[:tff|bff].
         #[arg(long = "deint")]
         deint: Vec<String>,
+        /// Only pick frames whose picture type in LABEL is one of TYPES, e.g. --frame-type ENC=B.
+        #[arg(long = "frame-type", value_parser = parse_kv)]
+        frame_type: Option<(String, String)>,
+        /// Leave out a reference-timeline range: START-END as seconds or [hh:]mm:ss. Repeatable.
+        #[arg(long = "exclude")]
+        exclude: Vec<String>,
+        /// Leave out OP/ED, found from chapter names in any source (off by default: episodes are
+        /// compared in full).
+        #[arg(long)]
+        exclude_op_ed: bool,
+        /// Also skip near-duplicate shots (same static shot picked twice).
+        #[arg(long)]
+        skip_duplicates: bool,
+        /// Also skip flat frames (solid colours, title cards).
+        #[arg(long)]
+        skip_flat: bool,
+        /// Black-screen threshold: mean luma 0..1 (default 0.03; raise to also skip dark scenes).
+        #[arg(long)]
+        dark: Option<f32>,
+        /// Turn off all rejection rules, including black screens and scene changes.
+        #[arg(long)]
+        no_reject: bool,
+        /// Save these settings as a TOML project file (then run as usual).
+        #[arg(long)]
+        save_project: Option<PathBuf>,
         /// Matrix override as LABEL=709|601|470bg|2020. Repeatable.
         #[arg(long = "matrix", value_parser = parse_kv)]
         matrices: Vec<(String, String)>,
@@ -90,6 +126,23 @@ fn parse_kv(s: &str) -> std::result::Result<(String, String), String> {
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
         .filter(|(k, v)| !k.is_empty() && !v.is_empty())
         .ok_or_else(|| format!("expected LABEL=VALUE, got '{s}'"))
+}
+
+/// "90-150", "1:30-2:30", "0:01:30.5-0:02:30" → seconds.
+fn parse_time_range(s: &str) -> Result<(f64, f64)> {
+    let secs = |t: &str| -> Result<f64> {
+        let mut total = 0.0;
+        for part in t.trim().split(':') {
+            total = total * 60.0 + part.parse::<f64>().with_context(|| format!("bad time '{t}'"))?;
+        }
+        Ok(total)
+    };
+    let (a, b) = s.split_once('-').with_context(|| format!("expected START-END, got '{s}'"))?;
+    Ok((secs(a)?, secs(b)?))
+}
+
+fn fmt_time(t: f64) -> String {
+    format!("{}:{:05.2}", (t / 60.0).floor() as i64, t % 60.0)
 }
 
 fn parse_matrix(s: &str) -> Result<i32> {
@@ -171,8 +224,145 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::Run { sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar } => {
-            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar)?;
+        Cmd::Project { file } => {
+            let p = Project::load(&file)?;
+            let mut select = SelectOptions { exclude_chapter_op_ed: p.exclude_op_ed, ..Default::default() };
+            select.dark_threshold = p.rules.black_threshold.map(|t| t as f32);
+            select.reject_transitions = p.rules.scene_changes;
+            select.duplicate_distance = p.rules.duplicates.then_some(6);
+            select.flat_threshold = p.rules.flat.then_some(0.02);
+            select.frame_type = p.frame_type.as_ref().map(|r| (r.source.clone(), r.types.to_ascii_uppercase().chars().collect()));
+            for r in &p.exclude {
+                select.exclude.push(parse_time_range(r)?);
+            }
+            let sources = p.sources.iter().map(|s| (s.label.clone(), s.path.to_string_lossy().into_owned())).collect();
+            let offsets = p
+                .sources
+                .iter()
+                .flat_map(|s| {
+                    s.offset.iter().flat_map(|o| o.split(',')).map(|o| (s.label.clone(), o.trim().to_string())).collect::<Vec<_>>()
+                })
+                .collect();
+            let field = |pick: fn(&comp_core::project::ProjectSource) -> &Option<String>| -> Vec<String> {
+                p.sources
+                    .iter()
+                    .filter_map(|s| pick(s).as_ref().map(|o| if o == "auto" { s.label.clone() } else { format!("{}:{o}", s.label) }))
+                    .collect()
+            };
+            let ivtc = field(|s| &s.ivtc);
+            let deint = field(|s| &s.deint);
+            let matrices = p.sources.iter().filter_map(|s| s.matrix.clone().map(|m| (s.label.clone(), m))).collect();
+            run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, select)?;
+        }
+        Cmd::Pair { sources } => {
+            let lists: Vec<Vec<PathBuf>> =
+                sources.iter().map(|(_, p)| pairing::expand_input(Path::new(p))).collect::<std::io::Result<_>>()?;
+            let pairs = pairing::pair(&lists);
+            println!("{:<8} {}", "episode", sources.iter().map(|(l, _)| format!("{l:<40}")).collect::<String>());
+            for row in &pairs.rows {
+                let cells: String = row
+                    .files
+                    .iter()
+                    .map(|f| {
+                        let n = f.as_ref().map(|f| f.file_name().unwrap_or_default().to_string_lossy().into_owned());
+                        let n = n.unwrap_or_else(|| "— missing —".into());
+                        format!("{:<40}", n.chars().take(38).collect::<String>())
+                    })
+                    .collect();
+                println!("{:<8} {cells}", row.episode.to_string());
+            }
+            for (si, files) in pairs.unparsed.iter().enumerate() {
+                for f in files {
+                    println!("unparsed ({}): {}", sources[si].0, f.display());
+                }
+            }
+            println!("{} of {} episodes present in every source", pairs.complete().count(), pairs.rows.len());
+        }
+        Cmd::Run {
+            sources,
+            offsets,
+            frames,
+            seed,
+            explicit,
+            ivtc,
+            deint,
+            frame_type,
+            exclude,
+            exclude_op_ed,
+            skip_duplicates,
+            skip_flat,
+            dark,
+            no_reject,
+            save_project,
+            matrices,
+            name,
+            out,
+            no_sar,
+        } => {
+            let mut select = SelectOptions { exclude_chapter_op_ed: exclude_op_ed, ..Default::default() };
+            if skip_duplicates {
+                select.duplicate_distance = Some(6);
+            }
+            if skip_flat {
+                select.flat_threshold = Some(0.02);
+            }
+            if let Some(d) = dark {
+                select.dark_threshold = Some(d);
+            }
+            if no_reject {
+                select.dark_threshold = None;
+                select.flat_threshold = None;
+                select.duplicate_distance = None;
+                select.reject_transitions = false;
+            }
+            if let Some((label, types)) = frame_type {
+                select.frame_type = Some((label, types.to_ascii_uppercase().chars().collect()));
+            }
+            for r in &exclude {
+                select.exclude.push(parse_time_range(r)?);
+            }
+            if let Some(file) = &save_project {
+                let project = Project {
+                    name: name.clone(),
+                    out: out.clone(),
+                    frames,
+                    seed,
+                    frame: explicit.clone(),
+                    exclude_op_ed,
+                    exclude: exclude.clone(),
+                    frame_type: select.frame_type.as_ref().map(|(l, t)| FrameTypeRule { source: l.clone(), types: t.iter().collect() }),
+                    rules: Rules {
+                        black_threshold: select.dark_threshold.map(|t| (t as f64 * 1000.0).round() / 1000.0),
+                        scene_changes: select.reject_transitions,
+                        duplicates: select.duplicate_distance.is_some(),
+                        flat: select.flat_threshold.is_some(),
+                    },
+                    no_sar,
+                    sources: sources
+                        .iter()
+                        .map(|(l, p)| {
+                            let field = |list: &Vec<String>| {
+                                list.iter().find_map(|i| {
+                                    let (lab, ord) = i.rsplit_once(':').unwrap_or((i, "auto"));
+                                    (lab == l).then(|| ord.to_string())
+                                })
+                            };
+                            let offs: Vec<&str> = offsets.iter().filter(|(ol, _)| ol == l).map(|(_, v)| v.as_str()).collect();
+                            ProjectSource {
+                                label: l.clone(),
+                                path: std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)),
+                                offset: (!offs.is_empty()).then(|| offs.join(",")),
+                                ivtc: field(&ivtc),
+                                deint: field(&deint),
+                                matrix: matrices.iter().find(|(ml, _)| ml == l).map(|(_, v)| v.clone()),
+                            }
+                        })
+                        .collect(),
+                };
+                project.save(file)?;
+                eprintln!("saved project to {}", file.display());
+            }
+            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar, select)?;
         }
     }
     Ok(())
@@ -191,6 +381,7 @@ fn run_comp(
     name: Option<String>,
     out: PathBuf,
     no_sar: bool,
+    select: SelectOptions,
 ) -> Result<()> {
     let mut specs: Vec<SourceSpec> = sources.iter().map(|(l, p)| SourceSpec::new(l, p)).collect();
     let find = |specs: &mut Vec<SourceSpec>, label: &str| -> Result<usize> {
@@ -231,11 +422,28 @@ fn run_comp(
     } else {
         FramePick::Explicit(explicit)
     };
+    // Sources may be folders: expand to files and pair episodes by number.
+    let lists: Vec<Vec<PathBuf>> = sources
+        .iter()
+        .map(|(l, p)| {
+            let v = pairing::expand_input(Path::new(p)).with_context(|| format!("reading {p}"))?;
+            anyhow::ensure!(!v.is_empty(), "no video files in '{p}' ({l})");
+            Ok(v)
+        })
+        .collect::<Result<_>>()?;
+    let pairs = pairing::pair(&lists);
+    let multi = lists.iter().any(|l| l.len() > 1);
+    let vs = specs.iter().map(|s| s.label.as_str()).collect::<Vec<_>>().join(" vs ");
     let name = name.unwrap_or_else(|| {
-        let stem = PathBuf::from(&sources[0].1).file_stem().unwrap_or_default().to_string_lossy().into_owned();
-        format!("{stem} - {}", specs.iter().map(|s| s.label.as_str()).collect::<Vec<_>>().join(" vs "))
+        let p = Path::new(&sources[0].1);
+        let base = if multi {
+            p.file_name()
+        } else {
+            p.file_stem()
+        };
+        format!("{} - {vs}", base.unwrap_or_default().to_string_lossy())
     });
-    let spec = CompSpec {
+    let mut spec = CompSpec {
         out_dir: comp::default_out_dir(&out, &name),
         name,
         sources: specs,
@@ -243,8 +451,53 @@ fn run_comp(
         convert: ConvertOptions { apply_sar: !no_sar, ..Default::default() },
         png: Default::default(),
         open: OpenOptions { index_cache: index_cache(), ..Default::default() },
+        select,
     };
 
+    if !multi {
+        for (i, s) in spec.sources.iter_mut().enumerate() {
+            s.path = lists[i][0].clone();
+        }
+        return run_one(&spec);
+    }
+
+    // Season mode: print the pairing table, then run every complete episode.
+    println!("{:<8} {}", "episode", spec.sources.iter().map(|s| format!("{:<10}", s.label)).collect::<String>());
+    for row in &pairs.rows {
+        let cells: String = row.files.iter().map(|f| format!("{:<10}", if f.is_some() { "✓" } else { "missing" })).collect();
+        println!("{:<8} {cells}", row.episode.to_string());
+    }
+    for (si, files) in pairs.unparsed.iter().enumerate() {
+        for f in files {
+            println!("warning: no episode number in {} ({})", f.display(), spec.sources[si].label);
+        }
+    }
+    for (si, dropped, kept) in &pairs.duplicates {
+        println!("warning: {} has two files for one episode; using {} over {}", spec.sources[*si].label, kept.display(), dropped.display());
+    }
+    let rows: Vec<_> = pairs.complete().cloned().collect();
+    anyhow::ensure!(!rows.is_empty(), "no episode is present in every source");
+    let base_dir = spec.out_dir.clone();
+    let base_name = spec.name.clone();
+    let mut failed = Vec::new();
+    for row in rows {
+        let ep = row.episode.to_string();
+        println!("\n=== {ep} ===");
+        for (i, s) in spec.sources.iter_mut().enumerate() {
+            s.path = row.files[i].clone().unwrap();
+        }
+        spec.name = format!("{base_name} - {ep}");
+        spec.out_dir = base_dir.join(&ep);
+        if let Err(e) = run_one(&spec) {
+            eprintln!("error in {ep}: {e:#}");
+            failed.push(ep);
+        }
+    }
+    anyhow::ensure!(failed.is_empty(), "failed episodes: {}", failed.join(", "));
+    Ok(())
+}
+
+fn run_one(spec: &CompSpec) -> Result<()> {
     let labels: Vec<String> = spec.sources.iter().map(|s| s.label.clone()).collect();
     let total_shots = Mutex::new((0usize, 0usize));
     let last_pct: Mutex<HashMap<usize, i64>> = Mutex::new(HashMap::new());
@@ -281,6 +534,11 @@ fn run_comp(
             info.container,
             info.seek_mode
         ),
+        Event::Excluded { ranges } => {
+            for (a, b, why) in ranges {
+                eprintln!("  excluding {}–{} ({why})", fmt_time(a), fmt_time(b));
+            }
+        }
         Event::FramesPicked { frames, usable } => {
             *total_shots.lock().unwrap() = (0, frames.len() * labels.len());
             eprintln!("  picked {} frames in [{}, {}): {:?}", frames.len(), usable.0, usable.1, frames);
@@ -295,10 +553,20 @@ fn run_comp(
         _ => {}
     };
 
-    let res = comp::run(&spec, &on_event)?;
+    let res = comp::run(spec, &on_event)?;
     println!("\n{} -> {}", res.name, res.out_dir.display());
     if let Some(seed) = res.seed {
         println!("seed {seed}");
+    }
+    if !res.rejected.is_empty() {
+        let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+        for (_, r) in &res.rejected {
+            *counts.entry(r.as_str()).or_default() += 1;
+        }
+        println!("rejected candidates: {counts:?}");
+    }
+    for (f, why) in &res.fallbacks {
+        println!("note: frame {f} kept despite '{why}' (nothing better in its bin)");
     }
     for s in &res.sources {
         let types: String = s.shots.iter().map(|x| x.pict_type.as_str()).collect();

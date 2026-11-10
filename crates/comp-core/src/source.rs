@@ -270,6 +270,8 @@ pub struct VideoSource {
     info: VideoInfo,
     /// Presentation time of every frame in seconds, relative to the first frame.
     times: Vec<f64>,
+    /// Absolute container time of the first frame, in seconds.
+    start_time: f64,
     err: ErrInfo,
 }
 
@@ -396,8 +398,8 @@ impl VideoSource {
             layout,
             color: color_of(f0),
         };
-        let times = frame_times(vs, info.num_frames);
-        Ok(Self { path: path.to_owned(), vs, info, times, err })
+        let (times, start_time) = frame_times(vs, info.num_frames);
+        Ok(Self { path: path.to_owned(), vs, info, times, start_time, err })
     }
 
     pub fn path(&self) -> &Path {
@@ -413,6 +415,11 @@ impl VideoSource {
         let props = unsafe { &*sys::FFMS_GetVideoProperties(self.vs) };
         // ffms2 reports 1 for TFF, 0 for BFF (and for progressive streams, where it doesn't matter).
         Some(props.TopFieldFirst != 0)
+    }
+
+    /// Absolute container time of the first frame in seconds (e.g. for chapter times).
+    pub fn start_time(&self) -> f64 {
+        self.start_time
     }
 
     /// Presentation time of every frame in seconds, relative to the first frame (ascending).
@@ -469,17 +476,17 @@ impl VideoSource {
 }
 
 /// Reads per-frame timestamps from the ffms2 track and normalises them to start at 0.
-fn frame_times(vs: *mut sys::FFMS_VideoSource, n: i32) -> Vec<f64> {
+/// Also returns the absolute time of the first frame.
+fn frame_times(vs: *mut sys::FFMS_VideoSource, n: i32) -> (Vec<f64>, f64) {
     unsafe {
         let track = sys::FFMS_GetTrackFromVideo(vs);
         let tb = &*sys::FFMS_GetTimeBase(track);
         // ffms2 timebase is in milliseconds: ms = PTS * Num / Den.
         let scale = tb.Num as f64 / tb.Den as f64 / 1000.0;
         let mut v: Vec<f64> = (0..n).map(|i| (*sys::FFMS_GetFrameInfo(track, i)).PTS as f64 * scale).collect();
-        if let Some(&t0) = v.first() {
-            v.iter_mut().for_each(|t| *t -= t0);
-        }
-        v
+        let t0 = v.first().copied().unwrap_or(0.0);
+        v.iter_mut().for_each(|t| *t -= t0);
+        (v, t0)
     }
 }
 

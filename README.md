@@ -23,9 +23,22 @@ cargo test --release -- --nocapture --test-threads=1
 The seek-accuracy test checks every frame of every clip, read straight through and in random
 order, against the MD5s from an independent system ffmpeg decode.
 
-## CLI (M0)
+## CLI
 
 ```bash
 comp info <files…>
-comp shot <file> <frame…> -o <dir>     # lossless PNGs; anamorphic sources stretched to DAR
+comp shot <file> <frame…> -o <dir>              # lossless PNGs of single frames
+comp pair -s BD=/bd/folder -s DVD=/dvd/folder   # check episode pairing (no decoding)
+comp run  -s BD=/bd/ep01.mkv -s DVD=/dvd/ep01.mkv -n 20 --seed 1
+comp run  -s BD=/bd/folder -s DVD=/dvd/folder   # whole season, one comparison per episode
+comp project setup.toml                         # run a saved project (see --save-project)
 ```
+
+Useful `run` options:
+
+- `--offset LABEL=N` / `LABEL=Xs`: frame or time offset. Sources are aligned by timestamp first, so VFR and CFR releases line up.
+- `--ivtc LABEL[:tff|bff]` / `--deint LABEL`: field processing for 1080i BD remuxes and NTSC DVDs.
+- `--frame-type ENC=B`: only frames that are B-frames in the `ENC` source.
+- `--exclude-op-ed`, `--exclude 1:30-3:00`: leave out OP/ED chapters or time ranges. Episodes are compared in full by default.
+- `--skip-duplicates`, `--skip-flat`, `--dark 0.1`, `--no-reject`: change the frame-picking rules. By default only black screens and scene changes are skipped.
+- `--matrix LABEL=709`, `--no-sar`.

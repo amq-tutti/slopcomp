@@ -45,6 +45,7 @@ fn mean_psnr(tag: &str, offset_frames: i32, offset_seconds: f64) -> f64 {
         convert: Default::default(),
         png: Default::default(),
         open: OpenOptions::default(),
+        select: Default::default(),
     };
     let res = comp::run(&spec, &|_| {}).unwrap();
     assert_eq!(res.frames.len(), 6);
@@ -83,6 +84,7 @@ fn rejects_offset_on_reference_and_single_source() {
         convert: Default::default(),
         png: Default::default(),
         open: OpenOptions::default(),
+        select: Default::default(),
     };
     assert!(comp::run(&spec(vec![r.clone()]), &|_| {}).is_err());
     r.offset_frames = 3;
@@ -110,6 +112,7 @@ fn ivtc_source_aligns_with_progressive_truth() {
         convert: Default::default(),
         png: Default::default(),
         open: OpenOptions::default(),
+        select: Default::default(),
     };
     let res = comp::run(&spec, &|_| {}).unwrap();
     assert_eq!(res.frames.len(), 12);
@@ -141,7 +144,69 @@ fn ivtc_refuses_progressive_film_rate_sources() {
         convert: Default::default(),
         png: Default::default(),
         open: OpenOptions::default(),
+        select: Default::default(),
     };
     let err = comp::run(&spec, &|_| {}).unwrap_err().to_string();
     assert!(err.contains("already 23.976"), "{err}");
+}
+
+fn spec_with(name: &str, sources: Vec<SourceSpec>, count: usize, select: comp_core::comp::SelectOptions) -> CompSpec {
+    CompSpec {
+        name: name.into(),
+        sources,
+        pick: FramePick::Random { count, seed: 21 },
+        out_dir: Path::new(env!("CARGO_TARGET_TMPDIR")).join(name),
+        convert: Default::default(),
+        png: Default::default(),
+        open: OpenOptions::default(),
+        select,
+    }
+}
+
+#[test]
+fn picking_skips_black_screens_and_scene_cuts() {
+    if !corpus("cuts_black.mkv").exists() {
+        eprintln!("SKIP: corpus missing");
+        return;
+    }
+    let src = || SourceSpec::new("A", corpus("cuts_black.mkv"));
+    let mut b = src();
+    b.label = "B".into();
+    // 30 bins over 240 frames: several bins fall entirely inside the black section. Black
+    // frames are never used; those bins are refilled elsewhere, so we still get 30 frames.
+    let res = comp::run(&spec_with("rules_on", vec![src(), b], 30, Default::default()), &|_| {}).unwrap();
+    let cut_adjacent = |f: i32| [95, 96, 143, 144].contains(&f);
+    let black = |f: i32| (96..144).contains(&f);
+    assert_eq!(res.frames.len(), 30);
+    assert!(res.fallbacks.is_empty(), "{:?}", res.fallbacks);
+    for &f in &res.frames {
+        assert!(!black(f), "picked black frame {f}");
+        assert!(!cut_adjacent(f), "picked frame {f} next to a scene cut");
+    }
+    let reasons: Vec<&str> = res.rejected.iter().map(|(_, r)| r.as_str()).collect();
+    assert!(reasons.contains(&"dark"), "black frames were considered and rejected: {reasons:?}");
+    eprintln!("picked {:?}\nrejected {:?}\nfallbacks {:?}", res.frames, res.rejected, res.fallbacks);
+
+    // With the rules off, the black section is fair game.
+    let off = comp_core::comp::SelectOptions {
+        dark_threshold: None,
+        reject_transitions: false,
+        ..Default::default()
+    };
+    let mut b = src();
+    b.label = "B".into();
+    let res = comp::run(&spec_with("rules_off", vec![src(), b], 30, off), &|_| {}).unwrap();
+    assert!(res.frames.iter().any(|&f| black(f)), "without rules some picks land in the black section");
+    assert!(res.rejected.is_empty());
+}
+
+#[test]
+fn frame_type_rule_picks_only_requested_types() {
+    let enc = || SourceSpec::new("ENC", corpus("h264_opengop.mkv"));
+    let select = comp_core::comp::SelectOptions { frame_type: Some(("ENC".into(), vec!['B'])), ..Default::default() };
+    let res = comp::run(&spec_with("ftype", vec![SourceSpec::new("REF", corpus("hevc_10bit.mkv")), enc()], 10, select), &|_| {}).unwrap();
+    let types: String = res.sources[1].shots.iter().map(|s| s.pict_type.as_str()).collect();
+    eprintln!("ENC types: {types}");
+    assert!(res.fallbacks.is_empty(), "{:?}", res.fallbacks);
+    assert!(types.chars().all(|c| c == 'B'), "{types}");
 }

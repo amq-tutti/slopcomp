@@ -12,7 +12,8 @@ It picks the same frames across sources, captures lossless PNGs and uploads them
 | License | GPLv3 (lets us bundle a full ffmpeg build) |
 | DVD | In scope, including IVTC and deinterlacing. PAL speedup is out of scope. |
 | Resolution | Native: each source is captured at its own resolution. The one exception is that anamorphic sources (e.g. DVD) are stretched to their display aspect ratio. |
-| OP/ED | Left out of frame picks by default |
+| OP/ED | Kept: episodes are compared in full. Opt-in `--exclude-op-ed` (chapters). Separate NCOP/NCED files are just ordinary sources. |
+| Frame picking rules | Default: skip only black screens and scene changes (cuts, fades). Near-duplicates, flat frames and dark scenes are opt-in. |
 | HDR | Out of scope (no tonemapping) |
 | Hybrids | Treated like any other encoded file. No special handling. |
 | Offsets | One frame offset per source, set manually with a sync preview, plus an "auto-suggest" button |
@@ -125,8 +126,9 @@ Sources (≥2 groups) ──► pairing ──► per-episode set
 Selection runs on the reference timeline and checks each candidate in every source:
 1. **Seeded RNG** (ChaCha8; the seed is stored in the project and shown in the UI, so runs can be reproduced).
 2. **Stratified sampling:** split the usable range into N equal bins and pick one candidate per bin, so picks spread across the episode instead of clustering.
-   The **OP/ED ranges are removed from the usable range by default** (see 4.3.1). There is a toggle to include them, and a dedicated "NCOP/NCED" mode for comparing creditless files.
-3. **Rejection filters** (a candidate is re-rolled within its bin, up to K tries):
+   OP/ED ranges stay in by default. `--exclude-op-ed` removes them (see 4.3.1).
+3. **Rejection filters** (a candidate is re-rolled within its bin, up to K tries). *As built:* the defaults reject only black screens (mean luma < 0.03) and scene changes (cut next door or fade). Duplicates, flat frames and dark scenes are opt-in.
+   Hard rejections (black, scene change) are never used as fallbacks. Their bins are refilled from the largest gaps between picks.
    - *Dark frame:* mean luma of the reference frame below a threshold (default ~ 16% of range), computed on the Y plane.
    - *Transition / scene cut:* a large luma difference to the previous or next frame, or a fade (monotonic brightness ramp over ±3 frames).
    - *Near-duplicate:* pHash too close to an already chosen frame (avoids static shots twice).
@@ -222,7 +224,7 @@ Licence: ship `LICENSE` (GPLv3) and the third-party notices for ffmpeg, ffms2, z
 |---|---|---|
 | M0 | **Deps + FFI spike** | ffmpeg/ffms2/zimg build statically on all 3 targets in CI. A Rust test decodes frame N via ffms2, converts it via zimg and writes a PNG. The seek-vs-sequential hash test passes on the sample corpus. |
 | M1 | **Core pipeline (CLI)** | `comp run` with 2+ progressive sources, manual offsets and plain seeded random frames writes the correct PNGs at native resolution. Colour matrix fallbacks are tested. |
-| M2 | **Selection + pairing** | Stratified sampling, dark/transition/near-duplicate rejection, frame-type preference, episode parser with a test table, multi-episode runs, project file. OP/ED exclusion from manual ranges and chapters. |
+| M2 | **Selection + pairing** ✅ | Stratified sampling, dark/transition/near-duplicate rejection, frame-type preference, episode parser with a test table, multi-episode runs, project file. OP/ED exclusion from manual ranges and chapters. |
 | M3 | **slow.pics upload** | Anonymous upload creates a working comparison, with retries and a cap. `comp upload` works on existing output. Limits are documented. |
 | M4 | **GUI** | Sources → Pairing → Sync (manual offset) → Settings → Run → Results → Upload, all working end to end. |
 | M5 | **Auto-suggest offsets** | Correct offset found on test pairs (WEB vs BD with a logo offset, DVD vs BD at different resolutions), with a confidence score that clearly flags wrong matches. Cross-episode OP/ED repeat detection (it reuses the same pHash sequences). |
