@@ -362,7 +362,8 @@ pub fn suggest_offset<P: FnMut(f32) -> bool>(
     // that, the correlation contrast alone is discounted.
     let cuts_agree = enough_cuts && (matched >= 3 || matched * 2 >= rc.len());
     let confidence = (if cuts_agree { contrast } else { contrast * 0.6 }).clamp(0.0, 1.0);
-    // Snap tiny offsets (timestamp rounding) to zero.
-    let offset = if offset.abs() < 0.002 { 0.0 } else { (offset * 1000.0).round() / 1000.0 };
+    // Snap sub-frame offsets to zero: under a quarter of a frame is timestamp rounding (e.g. VFR
+    // encodes with millisecond timestamps) and never changes which frame time alignment picks.
+    let offset = if offset.abs() < 0.25 * ostep { 0.0 } else { (offset * 1000.0).round() / 1000.0 };
     Ok(SyncSuggestion { offset_seconds: offset, confidence, correlation, baseline, ref_cuts: rc.len(), matched_cuts: matched, precision_frames: spread, method })
 }
