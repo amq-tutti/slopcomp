@@ -11,6 +11,7 @@ pub mod comp;
 pub mod convert;
 pub mod error;
 pub mod filter;
+pub mod season;
 pub mod select;
 pub mod pairing;
 pub mod project;

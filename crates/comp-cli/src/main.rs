@@ -16,7 +16,7 @@ use comp_core::comp::{self, CompSpec, Event, FramePick, SelectOptions, SourceSpe
 use comp_core::convert::{self, ConvertOptions};
 use comp_core::filter::{FieldMode, FieldOptions, FieldOrder};
 use comp_core::pairing;
-use comp_core::viewer;
+use comp_core::season::{self, SeasonEvent};
 use comp_core::project::{FrameTypeRule, Project, ProjectSource, Rules};
 use comp_core::source::{OpenOptions, VideoSource};
 
@@ -433,28 +433,15 @@ fn run_comp(
     } else {
         FramePick::Explicit(explicit)
     };
-    // Sources may be folders: expand to files and pair episodes by number.
-    let lists: Vec<Vec<PathBuf>> = sources
-        .iter()
-        .map(|(l, p)| {
-            let v = pairing::expand_input(Path::new(p)).with_context(|| format!("reading {p}"))?;
-            anyhow::ensure!(!v.is_empty(), "no video files in '{p}' ({l})");
-            Ok(v)
-        })
-        .collect::<Result<_>>()?;
-    let pairs = pairing::pair(&lists);
-    let multi = lists.iter().any(|l| l.len() > 1);
+    // Sources may be folders: episodes are paired by number and run one by one (comp_core::season).
+    let multi = sources.iter().any(|(_, p)| Path::new(p).is_dir());
     let vs = specs.iter().map(|s| s.label.as_str()).collect::<Vec<_>>().join(" vs ");
     let name = name.unwrap_or_else(|| {
         let p = Path::new(&sources[0].1);
-        let base = if multi {
-            p.file_name()
-        } else {
-            p.file_stem()
-        };
+        let base = if multi { p.file_name() } else { p.file_stem() };
         format!("{} - {vs}", base.unwrap_or_default().to_string_lossy())
     });
-    let mut spec = CompSpec {
+    let spec = CompSpec {
         out_dir: comp::default_out_dir(&out, &name),
         name,
         sources: specs,
@@ -463,129 +450,120 @@ fn run_comp(
         png: Default::default(),
         open: OpenOptions { index_cache: index_cache(), ..Default::default() },
         select,
+        cancel: None,
     };
 
-    if !multi {
-        for (i, s) in spec.sources.iter_mut().enumerate() {
-            s.path = lists[i][0].clone();
-        }
-        let res = run_one(&spec)?;
-        after_run(&res.out_dir, open, open_slowpics);
-        return Ok(());
-    }
-
-    // Season mode: print the pairing table, then run every complete episode.
-    println!("{:<8} {}", "episode", spec.sources.iter().map(|s| format!("{:<10}", s.label)).collect::<String>());
-    for row in &pairs.rows {
-        let cells: String = row.files.iter().map(|f| format!("{:<10}", if f.is_some() { "✓" } else { "missing" })).collect();
-        println!("{:<8} {cells}", row.episode.to_string());
-    }
-    for (si, files) in pairs.unparsed.iter().enumerate() {
-        for f in files {
-            println!("warning: no episode number in {} ({})", f.display(), spec.sources[si].label);
-        }
-    }
-    for (si, dropped, kept) in &pairs.duplicates {
-        println!("warning: {} has two files for one episode; using {} over {}", spec.sources[*si].label, kept.display(), dropped.display());
-    }
-    let rows: Vec<_> = pairs.complete().cloned().collect();
-    anyhow::ensure!(!rows.is_empty(), "no episode is present in every source");
-    let base_dir = spec.out_dir.clone();
-    let base_name = spec.name.clone();
-    let mut failed = Vec::new();
-    let mut entries = Vec::new();
-    for row in rows {
-        let ep = row.episode.to_string();
-        println!("\n=== {ep} ===");
-        for (i, s) in spec.sources.iter_mut().enumerate() {
-            s.path = row.files[i].clone().unwrap();
-        }
-        spec.name = format!("{base_name} - {ep}");
-        spec.out_dir = base_dir.join(&ep);
-        match run_one(&spec) {
-            Ok(res) => entries.push(viewer::SeasonEntry {
-                thumb: res.sources[0].shots.first().map(|s| format!("{ep}/{}", s.file)),
-                dir: ep.clone(),
-                frames: res.frames.len(),
-                episode: ep,
-            }),
-            Err(e) => {
-                eprintln!("error in {ep}: {e:#}");
-                failed.push(ep);
+    let labels: Vec<String> = spec.sources.iter().map(|s| s.label.clone()).collect();
+    let printer = Printer::new(labels.clone());
+    let started = Instant::now();
+    let res = season::run(&spec, &|e| match e {
+        SeasonEvent::Paired(p) => {
+            println!("{:<8} {}", "episode", labels.iter().map(|l| format!("{l:<10}")).collect::<String>());
+            for row in &p.rows {
+                let cells: String = row.files.iter().map(|f| format!("{:<10}", if f.is_some() { "✓" } else { "missing" })).collect();
+                println!("{:<8} {cells}", row.episode.to_string());
+            }
+            for (si, files) in p.unparsed.iter().enumerate() {
+                for f in files {
+                    println!("warning: no episode number in {} ({})", f.display(), labels[si]);
+                }
+            }
+            for (si, dropped, kept) in &p.duplicates {
+                println!("warning: {} has two files for one episode; using {} over {}", labels[*si], kept.display(), dropped.display());
             }
         }
-    }
-    if !entries.is_empty() {
-        let idx = viewer::write_season_index(&base_dir, &base_name, &entries)?;
-        println!("\nseason index: {}", idx.display());
-        if open {
-            open_external(&idx.to_string_lossy());
+        SeasonEvent::EpisodeStarted { episode, .. } => {
+            printer.reset();
+            if !episode.is_empty() {
+                println!("\n=== {episode} ===");
+            }
         }
-        if open_slowpics {
-            after_run(&base_dir, false, true);
-        }
+        SeasonEvent::Episode { event, .. } => printer.handle(event),
+        SeasonEvent::EpisodeDone { result, .. } => print_summary(&result),
+        SeasonEvent::EpisodeFailed { episode, error, .. } => eprintln!("error in {episode}: {error}"),
+        SeasonEvent::IndexWritten(p) => println!("\nseason index: {}", p.display()),
+    })?;
+    println!("done in {:.1}s", started.elapsed().as_secs_f64());
+    if let Some(idx) = &res.index {
+        let dir = idx.parent().unwrap_or(Path::new("."));
+        after_run(dir, open, open_slowpics);
     }
+    let failed: Vec<&str> = res.failed.iter().map(|(e, _)| e.as_str()).collect();
     anyhow::ensure!(failed.is_empty(), "failed episodes: {}", failed.join(", "));
     Ok(())
 }
 
-fn run_one(spec: &CompSpec) -> Result<comp::CompResult> {
-    let labels: Vec<String> = spec.sources.iter().map(|s| s.label.clone()).collect();
-    let total_shots = Mutex::new((0usize, 0usize));
-    let last_pct: Mutex<HashMap<usize, i64>> = Mutex::new(HashMap::new());
-    let started = Instant::now();
-    let on_event = |e: Event| match e {
-        Event::Indexing { source, done, total } if total > 0 => {
-            let pct = done * 100 / total;
-            let mut lp = last_pct.lock().unwrap();
-            if lp.get(&source).is_none_or(|&p| pct >= p + 10) {
-                lp.insert(source, pct);
-                eprintln!("  indexing {:<12} {pct:>3}%", labels[source]);
-            }
-        }
-        Event::Analyzing { source, done, total } if total > 0 => {
-            let pct = done * 100 / total;
-            let mut lp = last_pct.lock().unwrap();
-            let key = source + 1000;
-            if lp.get(&key).is_none_or(|&p| pct >= p + 10) {
-                lp.insert(key, pct);
-                eprintln!("  field analysis {:<12} {pct:>3}%", labels[source]);
-            }
-        }
-        Event::Opened { source, info } => eprintln!(
-            "  opened   {:<12} {}x{} {}-bit, {} frames @ {}/{}, sar {}:{}, {} ({:?} seek)",
-            labels[source],
-            info.width,
-            info.height,
-            info.layout.bit_depth,
-            info.num_frames,
-            info.fps_num,
-            info.fps_den,
-            info.sar.0,
-            info.sar.1,
-            info.container,
-            info.seek_mode
-        ),
-        Event::Excluded { ranges } => {
-            for (a, b, why) in ranges {
-                eprintln!("  excluding {}–{} ({why})", fmt_time(a), fmt_time(b));
-            }
-        }
-        Event::FramesPicked { frames, usable } => {
-            *total_shots.lock().unwrap() = (0, frames.len() * labels.len());
-            eprintln!("  picked {} frames in [{}, {}): {:?}", frames.len(), usable.0, usable.1, frames);
-        }
-        Event::Shot { .. } => {
-            let mut t = total_shots.lock().unwrap();
-            t.0 += 1;
-            if t.0 == t.1 || t.0 % 10 == 0 {
-                eprintln!("  shots {}/{}", t.0, t.1);
-            }
-        }
-        _ => {}
-    };
+/// Prints progress for one comparison's events.
+struct Printer {
+    labels: Vec<String>,
+    total_shots: Mutex<(usize, usize)>,
+    last_pct: Mutex<HashMap<usize, i64>>,
+}
 
-    let res = comp::run(spec, &on_event)?;
+impl Printer {
+    fn new(labels: Vec<String>) -> Self {
+        Self { labels, total_shots: Mutex::new((0, 0)), last_pct: Mutex::new(HashMap::new()) }
+    }
+    fn reset(&self) {
+        *self.total_shots.lock().unwrap() = (0, 0);
+        self.last_pct.lock().unwrap().clear();
+    }
+    fn handle(&self, e: Event) {
+        let labels = &self.labels;
+        match e {
+            Event::Indexing { source, done, total } if total > 0 => {
+                let pct = done * 100 / total;
+                let mut lp = self.last_pct.lock().unwrap();
+                if lp.get(&source).is_none_or(|&p| pct >= p + 10) {
+                    lp.insert(source, pct);
+                    eprintln!("  indexing {:<12} {pct:>3}%", labels[source]);
+                }
+            }
+            Event::Analyzing { source, done, total } if total > 0 => {
+                let pct = done * 100 / total;
+                let mut lp = self.last_pct.lock().unwrap();
+                let key = source + 1000;
+                if lp.get(&key).is_none_or(|&p| pct >= p + 10) {
+                    lp.insert(key, pct);
+                    eprintln!("  field analysis {:<12} {pct:>3}%", labels[source]);
+                }
+            }
+            Event::Opened { source, info } => eprintln!(
+                "  opened   {:<12} {}x{} {}-bit, {} frames @ {}/{}, sar {}:{}, {} ({:?} seek)",
+                labels[source],
+                info.width,
+                info.height,
+                info.layout.bit_depth,
+                info.num_frames,
+                info.fps_num,
+                info.fps_den,
+                info.sar.0,
+                info.sar.1,
+                info.container,
+                info.seek_mode
+            ),
+            Event::Excluded { ranges } => {
+                for (a, b, why) in ranges {
+                    eprintln!("  excluding {}–{} ({why})", fmt_time(a), fmt_time(b));
+                }
+            }
+            Event::FramesPicked { frames, usable } => {
+                *self.total_shots.lock().unwrap() = (0, frames.len() * labels.len());
+                eprintln!("  picked {} frames in [{}, {}): {:?}", frames.len(), usable.0, usable.1, frames);
+            }
+            Event::Shot { .. } => {
+                let mut t = self.total_shots.lock().unwrap();
+                t.0 += 1;
+                if t.0 == t.1 || t.0 % 10 == 0 {
+                    eprintln!("  shots {}/{}", t.0, t.1);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn print_summary(res: &comp::CompResult) {
     println!("\n{} -> {}", res.name, res.out_dir.display());
     if let Some(seed) = res.seed {
         println!("seed {seed}");
@@ -617,8 +595,6 @@ fn run_one(spec: &CompSpec) -> Result<comp::CompResult> {
         );
     }
     println!("viewer: {}", res.out_dir.join("index.html").display());
-    println!("done in {:.1}s", started.elapsed().as_secs_f64());
-    Ok(res)
 }
 
 /// Opens a file, folder or URL with the OS default handler.

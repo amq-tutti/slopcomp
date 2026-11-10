@@ -46,6 +46,7 @@ fn mean_psnr(tag: &str, offset_frames: i32, offset_seconds: f64) -> f64 {
         png: Default::default(),
         open: OpenOptions::default(),
         select: Default::default(),
+        cancel: None,
     };
     let res = comp::run(&spec, &|_| {}).unwrap();
     assert_eq!(res.frames.len(), 6);
@@ -85,6 +86,7 @@ fn rejects_offset_on_reference_and_single_source() {
         png: Default::default(),
         open: OpenOptions::default(),
         select: Default::default(),
+        cancel: None,
     };
     assert!(comp::run(&spec(vec![r.clone()]), &|_| {}).is_err());
     r.offset_frames = 3;
@@ -113,6 +115,7 @@ fn ivtc_source_aligns_with_progressive_truth() {
         png: Default::default(),
         open: OpenOptions::default(),
         select: Default::default(),
+        cancel: None,
     };
     let res = comp::run(&spec, &|_| {}).unwrap();
     assert_eq!(res.frames.len(), 12);
@@ -145,6 +148,7 @@ fn ivtc_refuses_progressive_film_rate_sources() {
         png: Default::default(),
         open: OpenOptions::default(),
         select: Default::default(),
+        cancel: None,
     };
     let err = comp::run(&spec, &|_| {}).unwrap_err().to_string();
     assert!(err.contains("already 23.976"), "{err}");
@@ -160,6 +164,7 @@ fn spec_with(name: &str, sources: Vec<SourceSpec>, count: usize, select: comp_co
         png: Default::default(),
         open: OpenOptions::default(),
         select,
+        cancel: None,
     }
 }
 

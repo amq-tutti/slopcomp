@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/comp-sys", "crates/comp-core", "crates/comp-cli"]
+members = ["crates/comp-sys", "crates/comp-core", "crates/comp-cli", "crates/comp-gui"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-rust-version = "1.80"
+rust-version = "1.87"
 
 [profile.release]
 lto = "thin"

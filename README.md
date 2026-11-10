@@ -13,6 +13,14 @@ cargo build --release         # builds target/release/comp
 Requirements: Rust, a C/C++ toolchain, autoconf/automake/libtool, meson, ninja, pkg-config, nasm (x86 only), libclang.
 On Windows, build inside MSYS2 UCRT64 (see `.github/workflows/ci.yml`).
 
+## Desktop app
+
+```bash
+cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → target/release/anime-comp.app
+```
+
+Drop files or episode folders onto the window, check alignment in **Sync** (offsets per source, flicker), then **Run**. Setups save as TOML projects that the CLI can also run (`comp project file.toml`), and `anime-comp file.toml` opens one directly.
+
 ## Testing
 
 ```bash

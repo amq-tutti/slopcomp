@@ -1,0 +1,17 @@
+[package]
+name = "comp-gui"
+description = "Native desktop front-end for anime-comp (egui)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "anime-comp"
+path = "src/main.rs"
+
+[dependencies]
+comp-core = { path = "../comp-core" }
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "persistence", "wayland", "x11"] }
+egui_extras = { version = "0.31" }
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }

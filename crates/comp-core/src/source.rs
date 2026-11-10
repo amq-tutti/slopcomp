@@ -56,6 +56,16 @@ fn cpath(p: &Path) -> Result<CString> {
     CString::new(s).map_err(|_| Error::BadPath(p.to_owned()))
 }
 
+/// Default per-user cache directory for indexes and field maps:
+/// `$XDG_CACHE_HOME/anime-comp/index`, `~/.cache/anime-comp/index` or `%LOCALAPPDATA%\anime-comp\index`.
+pub fn default_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .map(|d| d.join("anime-comp").join("index"))
+}
+
 /// Stable cache key for a media file: size + mtime + xxh3 of the first and last MiB.
 pub fn cache_key(path: &Path) -> Result<String> {
     const CHUNK: u64 = 1 << 20;
@@ -331,6 +341,9 @@ impl VideoSource {
             // Only video is needed. Audio decoders aren't even built.
             unsafe { sys::FFMS_TrackTypeIndexSettings(indexer, sys::FFMS_TYPE_AUDIO, 0, 0) };
 
+            fn cb_of<G: FnMut(i64, i64) -> bool>(_: &G) -> unsafe extern "C" fn(i64, i64, *mut std::ffi::c_void) -> c_int {
+                cb::<G>
+            }
             unsafe extern "C" fn cb<F: FnMut(i64, i64) -> bool>(
                 current: i64,
                 total: i64,
@@ -343,12 +356,21 @@ impl VideoSource {
                     1
                 }
             }
+            let mut cancelled = false;
+            let mut wrapped = |done: i64, total: i64| {
+                let go = progress(done, total);
+                cancelled |= !go;
+                go
+            };
             unsafe {
-                sys::FFMS_SetProgressCallback(indexer, Some(cb::<F>), &mut progress as *mut F as *mut _);
+                sys::FFMS_SetProgressCallback(indexer, Some(cb_of(&wrapped)), &mut wrapped as *mut _ as *mut _);
             }
             // DoIndexing2 always frees the indexer.
             index = unsafe { sys::FFMS_DoIndexing2(indexer, sys::FFMS_IEH_STOP_TRACK as c_int, err.ptr()) };
             if index.is_null() {
+                if cancelled {
+                    return Err(Error::Cancelled);
+                }
                 return Err(err.err("indexing"));
             }
             if let Some(cf) = &cache_file {

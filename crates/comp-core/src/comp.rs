@@ -64,6 +64,17 @@ pub struct CompSpec {
     pub open: OpenOptions,
     /// Rules for random frame picking.
     pub select: SelectOptions,
+    /// Set to true from another thread to stop the run (returns [`Error::Cancelled`]).
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl CompSpec {
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    }
+    fn check_cancel(&self) -> Result<()> {
+        if self.cancelled() { Err(Error::Cancelled) } else { Ok(()) }
+    }
 }
 
 /// Rules for random frame picking. Explicit frame lists bypass all of these.
@@ -215,14 +226,14 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
                 s.spawn(move || {
                     let vs = VideoSource::open_with_progress(&src.path, &spec.open, |done, total| {
                         on_event(Event::Indexing { source: i, done, total });
-                        true
+                        !spec.cancelled()
                     })?;
                     let vs = match src.field {
                         None => AnySource::Plain(vs),
                         Some(fo) => {
                             let fs = FilteredSource::new(vs, fo, spec.open.index_cache.as_deref(), |done, total| {
                                 on_event(Event::Analyzing { source: i, done, total });
-                                true
+                                !spec.cancelled()
                             })?;
                             AnySource::Filtered(Box::new(fs))
                         }
@@ -235,8 +246,12 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
         handles.into_iter().map(|h| h.join().expect("source thread panicked")).collect()
     });
     let mut sources = Vec::with_capacity(opened.len());
+    spec.check_cancel()?;
     for (i, r) in opened.into_iter().enumerate() {
-        sources.push(r.map_err(|e| Error::Spec(format!("{}: {e}", spec.sources[i].label)))?);
+        sources.push(r.map_err(|e| match e {
+            Error::Cancelled => Error::Cancelled,
+            e => Error::Spec(format!("{}: {e}", spec.sources[i].label)),
+        })?);
     }
 
     // Phase 2: map every reference frame into each source by timestamp, then pick frames inside
@@ -366,6 +381,7 @@ fn shoot_source(
     let mut shots = Vec::with_capacity(targets.len());
     let mut color = None;
     for (k, &(rf, sf, rt)) in targets.iter().enumerate() {
+        spec.check_cancel()?;
         let st = vs.times()[sf as usize];
         let frame = vs.frame(sf)?;
         let pict = frame.pict_type;
@@ -506,6 +522,7 @@ fn pick_random(
     let mut picked_hashes: Vec<(i32, u64)> = Vec::new();
 
     let rep = select::pick(allowed, count, seed, sel.max_tries, |r, picked| -> Result<Verdict> {
+        spec.check_cancel()?;
         picked_hashes.retain(|(f, _)| picked.contains(f));
         // 1. Frame type (cheapest to reject early on, one decode).
         if let Some((ti, types)) = &type_src {
