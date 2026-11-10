@@ -94,6 +94,10 @@ pub struct OwnedFrame {
     pub layout: PixelLayout,
     pub color: ColorInfo,
     pub interlaced: bool,
+    /// Picture type of the decoded frame this output is mainly built from ('?' if unknown). Field
+    /// matching can weave in a field from a neighbouring frame of a different type, so this
+    /// describes the main source frame, not the woven result.
+    pub pict_type: char,
     planes: Vec<Vec<u8>>,
 }
 
@@ -111,7 +115,7 @@ impl OwnedFrame {
             height: self.height,
             layout: self.layout,
             color: self.color,
-            pict_type: '?',
+            pict_type: self.pict_type,
             key_frame: false,
             interlaced: self.interlaced,
             top_field_first: false,
@@ -335,7 +339,15 @@ impl Chain {
             }
             Ok(Some(ChainOut {
                 src_index: (tag - 1) as i32,
-                frame: OwnedFrame { width: w as u32, height: h as u32, layout: self.layout, color: self.color, interlaced, planes },
+                frame: OwnedFrame {
+                    width: w as u32,
+                    height: h as u32,
+                    layout: self.layout,
+                    color: self.color,
+                    interlaced,
+                    pict_type: '?',
+                    planes,
+                },
             }))
         }
     }
@@ -418,6 +430,8 @@ struct Running {
     chain: Chain,
     next_feed: i32,
     recent: VecDeque<ChainOut>,
+    /// Picture types of recently fed source frames (index, type).
+    picts: VecDeque<(i32, char)>,
 }
 
 impl FilteredSource {
@@ -643,7 +657,7 @@ impl FilteredSource {
     fn run_window(&mut self, start: i32, want_src: i32, cycle: i32) -> Result<Option<OwnedFrame>> {
         self.running = None;
         let chain = Chain::new(&self.opts, self.tff, self.inner.info())?;
-        let mut run = Running { chain, next_feed: start, recent: VecDeque::new() };
+        let mut run = Running { chain, next_feed: start, recent: VecDeque::new(), picts: VecDeque::new() };
         let found = feed_until(&mut self.inner, &mut run, want_src, cycle)?;
         self.running = Some(run);
         Ok(found)
@@ -658,7 +672,8 @@ fn feed_until(inner: &mut VideoSource, run: &mut Running, want_src: i32, cycle: 
     let give_up_at = ((want_src / cycle) + 3) * cycle;
     loop {
         // Drain outputs first.
-        while let Some(out) = run.chain.pull()? {
+        while let Some(mut out) = run.chain.pull()? {
+            out.frame.pict_type = run.picts.iter().find(|(i, _)| *i == out.src_index).map(|p| p.1).unwrap_or('?');
             let hit = out.src_index == want_src;
             let past = out.src_index > want_src;
             run.recent.push_back(out);
@@ -685,6 +700,10 @@ fn feed_until(inner: &mut VideoSource, run: &mut Running, want_src: i32, cycle: 
         }
         let i = run.next_feed;
         let f = inner.frame(i)?;
+        run.picts.push_back((i, f.pict_type));
+        if run.picts.len() > 64 {
+            run.picts.pop_front();
+        }
         run.chain.push(&f, i)?;
         run.next_feed += 1;
     }

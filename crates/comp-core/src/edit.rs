@@ -105,6 +105,7 @@ impl Editor {
         }
         let source_time = opened.src.times()[frame as usize];
         let sar = opened.src.info().sar;
+        let filtered = opened.src.is_filtered();
         let f = opened.src.frame(frame)?;
         let pict = f.pict_type;
         let img = convert::to_rgb(&f, sar, &conv)?;
@@ -114,7 +115,7 @@ impl Editor {
             source_frame: frame,
             reference_time,
             source_time,
-            pict_type: pict.to_string(),
+            pict_type: if filtered { format!("{pict}*") } else { pict.to_string() },
             file,
             width: img.width,
             height: img.height,

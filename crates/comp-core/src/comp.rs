@@ -199,8 +199,31 @@ pub struct CompResult {
     pub out_dir: PathBuf,
 }
 
+/// A source label as it appears in shot file names: as typed, with only characters that aren't
+/// allowed in file names replaced (so slow.pics shows it unchanged as the column title).
+pub fn shot_label(label: &str) -> String {
+    let s = folder_name(label);
+    if s == "comparison" && label.trim().is_empty() { "source".into() } else { s }
+}
+
 fn default_true() -> bool {
     true
+}
+
+/// Re-running into the same folder: delete the shots the previous run listed in its comp.json, so
+/// stale PNGs (other frames, renamed sources) don't linger next to the new ones. Only files named
+/// in comp.json are removed.
+fn remove_previous_shots(dir: &Path) {
+    let Ok(text) = std::fs::read_to_string(dir.join("comp.json")) else { return };
+    let Ok(prev) = serde_json::from_str::<CompResult>(&text) else { return };
+    for s in &prev.sources {
+        for sh in &s.shots {
+            // Plain file names only (no paths), as written by this tool.
+            if !sh.file.contains('/') && !sh.file.contains('\\') && sh.file.ends_with(".png") {
+                let _ = std::fs::remove_file(dir.join(&sh.file));
+            }
+        }
+    }
 }
 
 /// Makes a label safe for a file name, keeping it readable ("BD Remux" → "BD_Remux").
@@ -217,10 +240,11 @@ fn validate(spec: &CompSpec) -> Result<()> {
     if spec.sources.len() < 2 {
         return Err(Error::Spec("need at least two sources".into()));
     }
-    let mut labels: Vec<_> = spec.sources.iter().map(|s| file_label(&s.label)).collect();
+    // Case-insensitive: macOS and Windows file systems treat "BD" and "bd" as the same file.
+    let mut labels: Vec<_> = spec.sources.iter().map(|s| shot_label(&s.label).to_lowercase()).collect();
     labels.sort();
     if labels.windows(2).any(|w| w[0] == w[1]) {
-        return Err(Error::Spec("source labels must be unique (after sanitising for file names)".into()));
+        return Err(Error::Spec("source labels must be different".into()));
     }
     let r = &spec.sources[0];
     if r.offset_frames != 0 || r.offset_seconds != 0.0 {
@@ -233,6 +257,7 @@ fn validate(spec: &CompSpec) -> Result<()> {
 pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompResult> {
     validate(spec)?;
     std::fs::create_dir_all(&spec.out_dir)?;
+    remove_previous_shots(&spec.out_dir);
 
     // Phase 1: open/index all sources in parallel.
     let opened: Vec<Result<(AnySource, crate::crop::Crop)>> = std::thread::scope(|s| {
@@ -412,7 +437,7 @@ fn shoot_source(
         crop: Some(crop),
         ..spec.convert.clone()
     };
-    let label = file_label(&src.label);
+    let label = shot_label(&src.label);
     let mut shots = Vec::with_capacity(targets.len());
     let mut color = None;
     for (k, &(rf, sf, rt)) in targets.iter().enumerate() {
@@ -422,9 +447,9 @@ fn shoot_source(
         let pict = frame.pict_type;
         let img = convert::to_rgb(&frame, info.sar, &conv)?;
         color.get_or_insert(img.color);
-        // Frame-major, then source order: plain name order groups each frame's images together
-        // in -s order (handy for drag-and-drop uploaders and for the viewer).
-        let file = format!("{rf:06}_{}-{label}.png", index + 1);
+        // "<frame>_<label as typed>.png": slow.pics' batch upload groups files by the frame number
+        // and uses the rest of the name as the column title.
+        let file = format!("{rf:06}_{label}.png");
         let path = spec.out_dir.join(&file);
         convert::write_png(&img, &path, spec.png)?;
         on_event(Event::Shot { source: index, index: k, path });
@@ -433,7 +458,8 @@ fn shoot_source(
             source_frame: sf,
             reference_time: rt,
             source_time: st,
-            pict_type: pict.to_string(),
+            // '*': field-processed source; the letter is the main decoded frame's type.
+            pict_type: if vs.is_filtered() { format!("{pict}*") } else { pict.to_string() },
             file,
             width: img.width,
             height: img.height,

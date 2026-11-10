@@ -156,7 +156,7 @@ File names stay ASCII-safe. Group labels go into the slow.pics image names uncha
 ## 5. slow.pics client (anonymous) — ON HOLD
 
 > **Status (M3):** slow.pics' rules (https://slow.pics/about#scripts) say upload scripts and tools need permission from staff, and undiscussed tools may be blocked. The site also refuses automated requests. Without that permission, the tool doesn't talk to slow.pics. Instead:
-> - Screenshots are named `{frame:06}_{source#}-{label}.png`, so name order is frame by frame with sources in `-s` order, ready to drag into the slow.pics web uploader by hand (`--open-slowpics` opens the folder and the page).
+> - Screenshots are named `{frame:06}_{label}.png` with the label as typed. slow.pics' batch upload groups files by the frame number and uses the label as the column title (`--open-slowpics` opens the folder and the page).
 > - Every comparison gets an offline `index.html` viewer (side-by-side, slider, flicker, synced zoom/pan, keyboard navigation). Season runs also get an index page linking each episode.
 >
 > The flow below is kept for reference in case permission is granted.

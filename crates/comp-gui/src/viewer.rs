@@ -190,6 +190,9 @@ pub struct Viewer {
     replace_with: i32,
     /// Comparison frame `replace_with` was initialised for.
     replace_for: Option<i32>,
+    /// Frame numbers being dragged/typed in the Adjust panel, keyed by (comparison frame, source).
+    /// Applied when the drag ends or the field loses focus.
+    frame_edits: HashMap<(i32, usize), i32>,
     show_fix: bool,
 }
 
@@ -221,6 +224,7 @@ impl Viewer {
             message: None,
             replace_with: 0,
             replace_for: None,
+            frame_edits: HashMap::new(),
             show_fix: true,
         }
     }
@@ -466,13 +470,12 @@ impl Viewer {
                             let fit = fit_rect(rect, tex.size_vec2());
                             painter.image(tex.id(), fit, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
                         }
-                        painter.text(
-                            rect.right_bottom() - Vec2::new(4.0, 3.0),
-                            egui::Align2::RIGHT_BOTTOM,
-                            result.frames[k].to_string(),
-                            egui::FontId::proportional(11.0),
-                            Color32::WHITE,
-                        );
+                        // Frame number on a dark pill so it reads on light thumbnails too.
+                        let galley = painter.layout_no_wrap(result.frames[k].to_string(), egui::FontId::proportional(11.0), Color32::WHITE);
+                        let pad = Vec2::new(5.0, 2.0);
+                        let pill = Rect::from_min_size(rect.right_bottom() - galley.size() - pad * 2.0 - Vec2::new(4.0, 4.0), galley.size() + pad * 2.0);
+                        painter.rect_filled(pill, 4.0, Color32::from_black_alpha(180));
+                        painter.galley(pill.min + pad, galley, Color32::WHITE);
                         if k == self.frame {
                             painter.rect_stroke(rect, 3.0, egui::Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
                         }
@@ -567,15 +570,21 @@ impl Viewer {
         }
 
         let painter = ui.painter();
-        let label = |painter: &egui::Painter, rect: Rect, text: String, right: bool| {
+        let mut star_labels: Vec<Rect> = Vec::new();
+        let mut label = |painter: &egui::Painter, rect: Rect, text: String, right: bool| {
+            let has_star = text.contains('*');
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
             let pos = if right {
                 Pos2::new(rect.max.x - galley.size().x - 10.0, rect.min.y + 8.0)
             } else {
                 rect.min + Vec2::new(8.0, 8.0)
             };
-            painter.rect_filled(Rect::from_min_size(pos - Vec2::new(4.0, 2.0), galley.size() + Vec2::new(8.0, 4.0)), 4.0, Color32::from_black_alpha(170));
+            let bg = Rect::from_min_size(pos - Vec2::new(4.0, 2.0), galley.size() + Vec2::new(8.0, 4.0));
+            painter.rect_filled(bg, 4.0, Color32::from_black_alpha(170));
             painter.galley(pos, galley, Color32::WHITE);
+            if has_star {
+                star_labels.push(bg);
+            }
         };
         let shot_label = |s: usize| {
             let src = &result.sources[s];
@@ -623,6 +632,9 @@ impl Viewer {
                 label(painter, rect, shot_label(self.right), true);
             }
         }
+        for (i, r) in star_labels.iter().enumerate() {
+            ui.interact(*r, ui.id().with(("star", i)), Sense::hover()).on_hover_text(STAR_EXPLANATION);
+        }
         for kk in [k.wrapping_sub(1), k + 1] {
             if kk < result.frames.len() {
                 for s in 0..result.sources.len() {
@@ -669,11 +681,20 @@ impl Viewer {
                             self.busy = true;
                             let _ = self.edit_tx.send(EditReq::Nudge { rf, s, d: -1 });
                         }
-                        let mut f = cur;
+                        let key = (rf, s);
+                        let mut f = self.frame_edits.get(&key).copied().unwrap_or(cur);
                         let r = ui.add(egui::DragValue::new(&mut f).speed(0.1).prefix("#"));
-                        if (r.lost_focus() || r.drag_stopped()) && f != cur {
-                            self.busy = true;
-                            let _ = self.edit_tx.send(EditReq::Set { rf, s, f });
+                        if r.changed() {
+                            self.frame_edits.insert(key, f);
+                        }
+                        // Apply once the drag has ended / typing is finished (Enter or focus loss).
+                        if !r.dragged() && !r.has_focus() {
+                            if let Some(v) = self.frame_edits.remove(&key) {
+                                if v != cur {
+                                    self.busy = true;
+                                    let _ = self.edit_tx.send(EditReq::Set { rf, s, f: v });
+                                }
+                            }
                         }
                         if ui.button("+1").on_hover_text("Next frame in this source").clicked() {
                             self.busy = true;
@@ -689,9 +710,13 @@ impl Viewer {
         ui.add_space(10.0);
         ui.separator();
         ui.label(RichText::new("Replace this frame").strong());
-        ui.label(RichText::new("New shots for every source, mapped like the original run.").small().weak());
+        ui.label(RichText::new("Swap it for a different moment: new shots for every source, aligned like the original run.").small().weak());
         ui.add_enabled_ui(!busy, |ui| {
-            if ui.button("Random nearby frame").clicked() {
+            if ui
+                .button("Random nearby frame")
+                .on_hover_text("Pick a random frame between the neighbouring comparison frames")
+                .clicked()
+            {
                 self.busy = true;
                 let _ = self.edit_tx.send(EditReq::Replace { rf, new: None });
             }
@@ -700,14 +725,26 @@ impl Viewer {
                     self.replace_for = Some(rf);
                     self.replace_with = rf;
                 }
-                ui.add(egui::DragValue::new(&mut self.replace_with).speed(1.0).prefix("ref #"));
-                if ui.button("Use").clicked() && self.replace_with != rf {
+                ui.label("Replace with ref");
+                ui.add(egui::DragValue::new(&mut self.replace_with).speed(1.0).prefix("#"))
+                    .on_hover_text("Reference frame number to use instead (the number in the file names)");
+                let changed = self.replace_with != rf;
+                if ui
+                    .add_enabled(changed, egui::Button::new("Replace"))
+                    .on_hover_text("Replace this comparison frame with the reference frame entered on the left")
+                    .clicked()
+                {
                     self.busy = true;
                     let _ = self.edit_tx.send(EditReq::Replace { rf, new: Some(self.replace_with) });
                 }
             });
         });
-        ui.add_space(10.0);
+
+        ui.add_space(14.0);
+        ui.separator();
+        ui.heading("Comparison");
+        ui.label(RichText::new("Applies to the whole comparison.").small().weak());
+        ui.add_space(4.0);
         if let Some(d) = &self.dir {
             if ui.button("Open HTML viewer").clicked() {
                 crate::app::open_external(&d.join("index.html"));
@@ -715,9 +752,20 @@ impl Viewer {
             if ui.button("Show folder").clicked() {
                 crate::app::open_external(d);
             }
+            if ui
+                .button("Upload to slow.pics manually…")
+                .on_hover_text("Opens this folder and slow.pics' upload page. Drag the PNGs in; names sort frame by frame.")
+                .clicked()
+            {
+                crate::app::open_external(d);
+                crate::app::open_external(Path::new("https://slow.pics/comparison"));
+            }
         }
     }
 }
+
+/// Hover text for frame types marked with `*`.
+pub const STAR_EXPLANATION: &str = "* = field-processed source (IVTC / deinterlaced). The screenshot is woven from two fields that can come from different decoded frames, so it has no single picture type; the letter is the type of the decoded frame it is mainly built from.";
 
 fn uv() -> Rect {
     Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0))

@@ -39,6 +39,15 @@ lic() { if [[ -f "$P/$1/$2" ]]; then cat "$P/$1/$2"; else cat "deps/build/$1/$2"
   lic ffmpeg LICENSE.md
   echo '```'
   echo
+  echo "## Fonts"
+  echo
+  echo "IBM Plex Sans, IBM Plex Mono and IBM Plex Sans JP (© IBM Corp., https://github.com/IBM/plex), embedded in"
+  echo "the desktop app, are licensed under the SIL Open Font License 1.1:"
+  echo
+  echo '```'
+  tr -d '\r' < crates/comp-gui/fonts/OFL.txt
+  echo '```'
+  echo
   echo "## Rust crates"
   echo
   echo "| Crate | Version | Licence | Repository |"

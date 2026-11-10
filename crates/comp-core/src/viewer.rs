@@ -14,6 +14,18 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// Percent-encodes a relative path for use in an HTML attribute URL ('/' kept).
+fn url_path(p: &str) -> String {
+    let mut out = String::new();
+    for b in p.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// JSON that is safe to embed inside a `<script>` element.
 fn script_json<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_string(v).expect("serialise").replace("</", "<\\/").replace("<!--", "<\\!--")
@@ -56,11 +68,11 @@ pub fn write_season_index(dir: &Path, title: &str, entries: &[SeasonEntry]) -> R
         let img = e
             .thumb
             .as_ref()
-            .map(|t| format!(r#"<img loading="lazy" src="{}" alt="">"#, html_escape(t)))
+            .map(|t| format!(r#"<img loading="lazy" src="{}" alt="">"#, url_path(t)))
             .unwrap_or_default();
         cards.push_str(&format!(
             r#"<a class="card" href="{dir}/index.html">{img}<span>{ep}</span><small>{n} frames</small></a>"#,
-            dir = html_escape(&e.dir),
+            dir = url_path(&e.dir),
             ep = html_escape(&e.episode),
             n = e.frames
         ));

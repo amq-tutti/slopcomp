@@ -82,6 +82,7 @@ const STORAGE_KEY: &str = "setup";
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_fonts(&cc.egui_ctx);
         let mut setup = cc.storage.and_then(|s| eframe::get_value::<Setup>(s, STORAGE_KEY)).unwrap_or_default();
         // `anime-comp project.toml` opens a project.
         let mut project_path = None;
@@ -199,6 +200,27 @@ impl App {
                 Err(e) => self.notify(format!("Couldn't save: {e}"), true),
             }
         }
+    }
+
+    /// Clears sources, name and per-comparison state; keeps settings (output folder, frames, rules).
+    fn new_comparison(&mut self) {
+        self.setup.sources.clear();
+        self.setup.name.clear();
+        self.setup.frame_type = None;
+        self.setup.seed = random_seed();
+        self.project_path = None;
+        self.pairing = None;
+        self.sync.episode = 0;
+        self.sync.frame = 0;
+        self.sync.sent = None;
+        self.sync.ready = None;
+        self.sync.images.clear();
+        self.sync.suggestions.clear();
+        self.sync.error = None;
+        self.sync.status.clear();
+        self.run = None;
+        self.tab = Tab::Sources;
+        self.notify("New comparison: sources cleared, settings kept", false);
     }
 
     fn open_project(&mut self) {
@@ -344,6 +366,27 @@ impl App {
     }
 }
 
+/// IBM Plex Sans for UI text, IBM Plex Mono for monospace, IBM Plex Sans JP as the fallback for
+/// Japanese (file names, chapter titles), then egui's built-in fonts for any remaining symbols.
+fn install_fonts(ctx: &egui::Context) {
+    use eframe::egui::{FontData, FontDefinitions, FontFamily};
+    let mut fonts = FontDefinitions::default();
+    for (name, bytes) in [
+        ("plex-sans", &include_bytes!("../fonts/IBMPlexSans.ttf")[..]),
+        ("plex-mono", &include_bytes!("../fonts/IBMPlexMono-Regular.ttf")[..]),
+        ("plex-sans-jp", &include_bytes!("../fonts/IBMPlexSansJP-Regular.ttf")[..]),
+    ] {
+        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+    }
+    let prop = fonts.families.entry(FontFamily::Proportional).or_default();
+    prop.insert(0, "plex-sans".to_owned());
+    prop.insert(1, "plex-sans-jp".to_owned());
+    let mono = fonts.families.entry(FontFamily::Monospace).or_default();
+    mono.insert(0, "plex-mono".to_owned());
+    mono.insert(1, "plex-sans-jp".to_owned());
+    ctx.set_fonts(fonts);
+}
+
 pub fn open_external(target: &Path) {
     let t = target.as_os_str();
     #[cfg(target_os = "macos")]
@@ -391,6 +434,13 @@ impl eframe::App for App {
                         }
                         if ui.button("Open…").clicked() {
                             self.open_project();
+                        }
+                        if ui
+                            .button("New")
+                            .on_hover_text("Start a new comparison: clears sources and name, keeps settings")
+                            .clicked()
+                        {
+                            self.new_comparison();
                         }
                     });
                 });
@@ -783,6 +833,14 @@ impl App {
                         }
                     });
             }
+            let can_run = self.setup.problems().is_empty() && !self.running();
+            if ui
+                .add_enabled(can_run, egui::Button::new(RichText::new("Run comparison").strong()))
+                .on_hover_text("Run with these offsets and the current settings")
+                .clicked()
+            {
+                self.start_run(ui.ctx());
+            }
             if let Some((n, times)) = &self.sync.ready {
                 let n = *n;
                 for (d, txt) in [(-24, "-1s"), (-1, "-1")] {
@@ -957,7 +1015,11 @@ impl App {
                     let label = &self.setup.sources.get(i).map(|s| s.label.clone()).unwrap_or_default();
                     match &self.sync.images[i] {
                         Ok((tex, f, pt, (nw, nh))) => {
-                            ui.label(RichText::new(format!("{label}  ·  #{f}  ·  {pt}  ·  {nw}×{nh}")).small());
+                            let star = if self.setup.sources.get(i).is_some_and(|s| s.field != Field::Progressive) { "*" } else { "" };
+                            let r = ui.label(RichText::new(format!("{label}  ·  #{f}  ·  {pt}{star}  ·  {nw}×{nh}")).small());
+                            if !star.is_empty() {
+                                r.on_hover_text(crate::viewer::STAR_EXPLANATION);
+                            }
                             let h = w / tex.aspect_ratio();
                             ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, h)));
                         }
@@ -1102,8 +1164,23 @@ impl App {
                 }
             });
         });
-        if !running && ui.button("Back to sources").clicked() {
-            self.tab = Tab::Sources;
+        if !running {
+            let problems = self.setup.problems();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(problems.is_empty(), egui::Button::new(RichText::new("Run again").strong()))
+                    .on_hover_text("Run with the current settings (including offsets changed in Sync). Replaces this comparison's shots.")
+                    .clicked()
+                {
+                    self.start_run(ctx);
+                }
+                if ui.button("Back to sources").clicked() {
+                    self.tab = Tab::Sources;
+                }
+            });
+            for p in problems {
+                ui.label(RichText::new(p).weak());
+            }
         }
     }
 }

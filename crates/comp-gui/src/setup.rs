@@ -167,7 +167,7 @@ impl Setup {
                 break;
             }
         }
-        let mut labels: Vec<String> = self.sources.iter().map(|s| comp_core::comp::file_label(&s.label)).collect();
+        let mut labels: Vec<String> = self.sources.iter().map(|s| comp_core::comp::shot_label(&s.label).to_lowercase()).collect();
         labels.sort();
         if labels.windows(2).any(|w| w[0] == w[1]) {
             v.push("Source labels must be different.".into());

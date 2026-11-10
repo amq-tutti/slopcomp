@@ -105,6 +105,8 @@ footer { background: var(--panel); border-top: 1px solid var(--line); overflow-x
 const DATA = __DATA__;
 
 const $ = (id) => document.getElementById(id);
+// File names keep labels as typed (spaces, #, %, & …), so encode them for use as URLs.
+const u = (file) => encodeURIComponent(file);
 const sources = DATA.sources;
 const frames = DATA.frames;
 const state = {
@@ -139,7 +141,7 @@ frames.forEach((f, k) => {
   const t = document.createElement("button");
   t.className = "thumb";
   t.innerHTML = `<img loading="lazy" alt=""><span>${f}</span>`;
-  t.querySelector("img").src = sources[0].shots[k].file;
+  t.querySelector("img").src = u(sources[0].shots[k].file);
   t.addEventListener("click", () => { state.frame = k; render(); });
   $("strip").appendChild(t);
 });
@@ -171,6 +173,11 @@ function makePanel(imgs, tags) {
     const t = document.createElement("div");
     t.className = "tag" + (right ? " right" : "");
     t.textContent = text;
+    if (text.includes("*")) {
+      t.title = "* = field-processed source (IVTC / deinterlaced). The screenshot is woven from two fields that can come from different decoded frames, so it has no single picture type; the letter is the type of the decoded frame it is mainly built from.";
+      t.style.pointerEvents = "auto";
+      t.style.cursor = "help";
+    }
     p.appendChild(t);
   });
   attachPanZoom(p);
@@ -208,14 +215,14 @@ function render() {
     }
     grid.style.gridTemplateColumns = `repeat(${best}, 1fr)`;
     grid.style.gridTemplateRows = `repeat(${Math.ceil(n / best)}, 1fr)`;
-    sources.forEach((s, i) => { const p = makePanel([s.shots[k].file], [[shotLabel(i)]]); grid.appendChild(p); panels.push(p); });
+    sources.forEach((s, i) => { const p = makePanel([u(s.shots[k].file)], [[shotLabel(i)]]); grid.appendChild(p); panels.push(p); });
   } else if (state.mode === "flicker") {
-    const p = makePanel([sources[state.flick].shots[k].file], [[shotLabel(state.flick)]]);
+    const p = makePanel([u(sources[state.flick].shots[k].file)], [[shotLabel(state.flick)]]);
     grid.appendChild(p); panels.push(p);
     // Preload the other sources so flicking is instant.
-    sources.forEach((s) => { new Image().src = s.shots[k].file; });
+    sources.forEach((s) => { new Image().src = u(s.shots[k].file); });
   } else {
-    const p = makePanel([sources[state.a].shots[k].file, sources[state.b].shots[k].file],
+    const p = makePanel([u(sources[state.a].shots[k].file), u(sources[state.b].shots[k].file)],
       [[shotLabel(state.a)], [shotLabel(state.b), true]]);
     const div = document.createElement("div");
     div.className = "divider";
@@ -225,7 +232,7 @@ function render() {
   stage.appendChild(grid);
   applyTransform();
   // Preload neighbouring frames.
-  for (const kk of [k - 1, k + 1]) if (kk >= 0 && kk < frames.length) sources.forEach((s) => { new Image().src = s.shots[kk].file; });
+  for (const kk of [k - 1, k + 1]) if (kk >= 0 && kk < frames.length) sources.forEach((s) => { new Image().src = u(s.shots[kk].file); });
 }
 
 // ---- Synced zoom / pan (normalised to panel size) ---------------------------------------
