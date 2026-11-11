@@ -1,9 +1,28 @@
 name: CI
 
+# Only code and build inputs trigger CI (README, docs and changelog edits don't); the Actions tab
+# can still start a run by hand.
 on:
   push:
     branches: [master]
+    paths:
+      - "crates/**"
+      - "deps/**"
+      - "testdata/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths:
+      - "crates/**"
+      - "deps/**"
+      - "testdata/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -59,9 +78,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # ---------------------------------------------------------------- native deps
-      - name: Cache native deps
+      # Restore and save are separate steps so the deps are cached as soon as they're built, even
+      # if a later step (tests) fails. The release workflow uses the same key, so tag builds reuse
+      # this cache from master.
+      - name: Restore native deps
         id: deps-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: deps/prefix
           key: deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deps/build.sh') }}
@@ -70,12 +92,38 @@ jobs:
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: deps/build.sh
 
+      - name: Save native deps
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: deps/prefix
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
       # ---------------------------------------------------------------- build + test
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      # The corpus is random (test patterns with random seeds), so it's generated once per
+      # make_corpus.sh version and reused: faster, and the same clips from run to run.
+      - name: Restore test corpus
+        id: corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: testdata/corpus
+          key: corpus-${{ runner.os }}-${{ hashFiles('testdata/make_corpus.sh') }}
 
       - name: Generate test corpus
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
         run: testdata/make_corpus.sh
+
+      - name: Save test corpus
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: testdata/corpus
+          key: ${{ steps.corpus-cache.outputs.cache-primary-key }}
 
       - name: Build
         run: cargo build --workspace --release
