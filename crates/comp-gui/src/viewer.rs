@@ -274,6 +274,29 @@ impl Viewer {
         let _ = self.edit_tx.send(EditReq::Open(dir.to_owned()));
     }
 
+    /// Opens a picked folder: the comparison itself if it has comp.json, otherwise every comparison
+    /// found below it (added to the list, the first one shown).
+    pub fn open_folder(&mut self, dir: &Path) {
+        let found = find_comparisons(dir);
+        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string());
+        match found.as_slice() {
+            [] => {
+                self.message = Some((
+                    format!("No comparisons in \u{201c}{name}\u{201d}. Pick a folder that contains comp.json, or a folder above it."),
+                    true,
+                ));
+            }
+            [only] => self.open(&only.clone()),
+            [first, rest @ ..] => {
+                for d in rest {
+                    self.add(d);
+                }
+                self.open(&first.clone());
+                self.message = Some((format!("Opened {} comparisons from \u{201c}{name}\u{201d}.", found.len()), false));
+            }
+        }
+    }
+
     fn key(&self, file: &str, thumb: bool) -> String {
         format!("{file}#{}#{}", self.versions.get(file).copied().unwrap_or(0), if thumb { "t" } else { "f" })
     }
@@ -312,7 +335,17 @@ impl Viewer {
                     self.right = 1.min(res.sources.len().saturating_sub(1));
                     self.result = Some(res);
                 }
-                EditRep::Opened(Err(e)) => self.message = Some((e, true)),
+                EditRep::Opened(Err(e)) => {
+                    // A folder that vanished or lost its comp.json gets a plain explanation, not the OS error.
+                    let gone = self.dir.as_deref().is_some_and(|d| !d.join("comp.json").is_file());
+                    let msg = if gone {
+                        let name = self.dir.as_deref().map(list_name).unwrap_or_default();
+                        format!("Couldn't open \u{201c}{name}\u{201d}: its folder was moved or deleted, or it no longer has comp.json.")
+                    } else {
+                        format!("Couldn't open this comparison: {e}")
+                    };
+                    self.message = Some((msg, true));
+                }
                 EditRep::Updated { result, changed, select_rf } => {
                     for f in changed {
                         *self.versions.entry(f).or_insert(0) += 1;
@@ -347,6 +380,7 @@ impl Viewer {
             let cur = self.dir.clone();
             let mut open: Option<PathBuf> = None;
             let mut close: Option<PathBuf> = None;
+            let mut picked: Option<PathBuf> = None;
             let show_list = self.list.len() > 1 || (self.list.len() == 1 && cur.is_none());
             if show_list {
                 // egui sizes the popup to the button and truncates wider rows, so size the
@@ -393,9 +427,13 @@ impl Viewer {
                         close = Some(c.clone());
                     }
                 }
-                if ui.button("Open comparison…").on_hover_text("A folder containing comp.json").clicked() {
+                if ui
+                    .button("Open comparison…")
+                    .on_hover_text("A comparison folder, or any folder above it: every comparison inside is opened")
+                    .clicked()
+                {
                     if let Some(d) = rfd::FileDialog::new().pick_folder() {
-                        open = Some(d);
+                        picked = Some(d);
                     }
                 }
             });
@@ -403,6 +441,8 @@ impl Viewer {
                 self.close(&d);
             } else if let Some(d) = open {
                 self.open(&d);
+            } else if let Some(d) = picked {
+                self.open_folder(&d);
             }
         });
         ui.add_space(4.0);
@@ -863,6 +903,41 @@ impl Viewer {
 
 /// Name for the list of open comparisons. Season jobs put each episode in a folder named just
 /// "E01", so those get the series folder in front ("To Heart · E01").
+/// Folders with a comp.json at or below `root`, sorted by path (so E01, E02… stay in order). If `root`
+/// itself is a comparison, only it. Skips hidden folders and symlinks; depth and entry count are
+/// capped so picking a huge folder can't hang the app. Unreadable folders are skipped.
+fn find_comparisons(root: &Path) -> Vec<PathBuf> {
+    if root.join("comp.json").is_file() {
+        return vec![root.to_owned()];
+    }
+    const MAX_DEPTH: usize = 6;
+    const MAX_ENTRIES: usize = 50_000;
+    let mut found = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![(root.to_owned(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > MAX_ENTRIES {
+                break;
+            }
+            let Ok(ft) = entry.file_type() else { continue };
+            if !ft.is_dir() || entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if path.join("comp.json").is_file() {
+                found.push(path);
+            } else if depth + 1 < MAX_DEPTH {
+                stack.push((path, depth + 1));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 fn list_name(dir: &Path) -> String {
     let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     match dir.parent().and_then(|p| p.file_name()) {
@@ -882,4 +957,36 @@ fn uv() -> Rect {
 fn fit_rect(outer: Rect, size: Vec2) -> Rect {
     let s = (outer.width() / size.x).min(outer.height() / size.y);
     Rect::from_center_size(outer.center(), size * s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_comparisons;
+    use std::fs;
+    use std::path::Path;
+
+    fn comp(dir: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("comp.json"), "{}").unwrap();
+    }
+
+    #[test]
+    fn finds_comparisons_below_a_folder() {
+        let root = std::env::temp_dir().join(format!("slopcomp-find-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        comp(&root.join("Show/E02"));
+        comp(&root.join("Show/E01"));
+        comp(&root.join("Movie"));
+        comp(&root.join("deep/a/b/c/Nested"));
+        comp(&root.join(".hidden/Skipped"));
+        fs::create_dir_all(root.join("empty/stuff")).unwrap();
+
+        let rel = |v: Vec<std::path::PathBuf>| v.iter().map(|p| p.strip_prefix(&root).unwrap().display().to_string()).collect::<Vec<_>>();
+        assert_eq!(rel(find_comparisons(&root)), ["Movie", "Show/E01", "Show/E02", "deep/a/b/c/Nested"]);
+        // A comparison folder itself: just that one.
+        assert_eq!(rel(find_comparisons(&root.join("Movie"))), ["Movie"]);
+        // A folder with no comparisons.
+        assert!(find_comparisons(&root.join("empty")).is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
 }

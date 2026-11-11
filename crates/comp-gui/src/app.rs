@@ -142,7 +142,7 @@ impl App {
         app.tab = tab;
         // Developer flag --view=DIR (repeatable): open comparisons in the viewer; the last one shows.
         for d in args.iter().filter_map(|a| a.strip_prefix("--view=")) {
-            app.viewer.open(Path::new(d));
+            app.viewer.open_folder(Path::new(d));
             app.tab = Tab::Viewer;
         }
         if autostart && app.setup.problems().is_empty() {
