@@ -54,5 +54,10 @@ First public release.
   is the first Windows build, so please report anything that goes wrong.
 - `SHA256SUMS.txt` has the checksums of every download.
 
+### Known issues
+
+- For telecined sources (IVTC), the automatic offset suggestion can occasionally be a couple of
+  frames off while still reporting high confidence. Check the Sync previews before applying it.
+
 [Unreleased]: https://github.com/amq-tutti/anime-comp/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/amq-tutti/anime-comp/releases/tag/v0.1.0
