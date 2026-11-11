@@ -10,6 +10,13 @@ its notes.
 
 ## [Unreleased]
 
+### Added
+
+- Sync warns when a source's timing drifts within an episode: Auto re-checks its offset at a few
+  points later in the episode, and a "drifts N f" pill says by how much and where (for example a
+  DVD whose offset against the BD changes by 2 frames partway through). `comp sync` prints it too.
+- The app version is shown on hover over the logo and name, and under the keyboard shortcuts list.
+
 ### Fixed
 
 - The automatic offset suggestion could land a couple of frames off (and report its precision

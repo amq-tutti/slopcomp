@@ -409,7 +409,7 @@ fn main() -> Result<()> {
                 })
             };
             let mut reference = open_any(&sources[0].0, row.files[0].as_ref().unwrap())?;
-            let opts = SyncOptions { window_start: start, window_len: len, search };
+            let opts = SyncOptions { window_start: start, window_len: len, search, ..Default::default() };
             for (i, (label, _)) in sources.iter().enumerate().skip(1) {
                 let mut other = open_any(label, row.files[i].as_ref().unwrap())?;
                 let s = suggest_offset(&mut reference, &mut other, &opts, |_| true)?;
@@ -421,6 +421,13 @@ fn main() -> Result<()> {
                 );
                 if s.confidence >= 0.3 && s.offset_seconds != 0.0 {
                     println!("{:<12} use: --offset {label}={}s", "", s.offset_seconds);
+                }
+                if s.drift_frames >= 2 {
+                    let at = s.drift_at.map(|t| format!(" (largest around {}:{:02})", (t / 60.0) as u32, (t % 60.0) as u32)).unwrap_or_default();
+                    println!(
+                        "{:<12} drift: the best offset changes by up to {} frames within the episode{at}; one offset won't fit everywhere",
+                        "", s.drift_frames
+                    );
                 }
             }
         }

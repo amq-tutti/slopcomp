@@ -24,11 +24,14 @@ pub struct SyncOptions {
     pub window_len: f64,
     /// Largest offset searched, in seconds, either direction.
     pub search: f64,
+    /// Short windows spread through the reference (at 30%, 50%, 70%, 90%, …) where the offset is
+    /// re-checked to detect drift. 0 turns the check off.
+    pub drift_checks: usize,
 }
 
 impl Default for SyncOptions {
     fn default() -> Self {
-        Self { window_start: None, window_len: 60.0, search: 15.0 }
+        Self { window_start: None, window_len: 60.0, search: 15.0, drift_checks: 4 }
     }
 }
 
@@ -50,6 +53,14 @@ pub struct SyncSuggestion {
     pub precision_frames: u32,
     /// How the offset was found ("scene cuts" or "correlation search").
     pub method: &'static str,
+    /// Largest difference, in frames, between `offset_seconds` and the best offset at the drift
+    /// check windows (0 = no drift seen). Some releases' timing shifts within an episode (e.g. a DVD
+    /// against a BD), so no single offset fits everywhere.
+    pub drift_frames: u32,
+    /// Reference time (seconds) of the check window with the largest drift.
+    pub drift_at: Option<f64>,
+    /// How many drift check windows had enough motion to measure.
+    pub drift_checked: usize,
 }
 
 const GRID: usize = 16;
@@ -264,6 +275,48 @@ fn mean_motion_corr(rs: &[Sig], os: &[Sig], offset: f64, tol: f64) -> (f32, usiz
     (if n > 0 { sum / n as f32 } else { 0.0 }, n)
 }
 
+/// Re-checks `offset` in a short window starting at reference time `t0`: returns the best offset
+/// within ±`range` frames of it, in frames, or `None` when the window can't tell (too little motion,
+/// or no clear winner).
+#[allow(clippy::too_many_arguments)]
+fn local_drift<F: FnMut() -> bool>(
+    reference: &mut AnySource,
+    other: &mut AnySource,
+    crops: (Rect, Rect),
+    t0: f64,
+    len: f64,
+    offset: f64,
+    ostep: f64,
+    range: i32,
+    tick: &mut F,
+) -> Result<Option<i32>> {
+    let (rt, ot) = (reference.times().to_vec(), other.times().to_vec());
+    let margin = range as f64 * ostep + 0.2;
+    let ra = rt.partition_point(|&t| t < t0) as i32;
+    let rb = rt.partition_point(|&t| t < t0 + len) as i32;
+    let oa = ot.partition_point(|&t| t < t0 + offset - margin) as i32;
+    let ob = ot.partition_point(|&t| t < t0 + len + offset + margin) as i32;
+    if rb - ra < 24 || ob - oa < 24 {
+        return Ok(None);
+    }
+    let rs = signatures(reference, ra, rb, crops.0, tick)?;
+    let os = signatures(other, oa, ob, crops.1, tick)?;
+    let tol = 0.75 * median_step(&rs).max(median_step(&os));
+    let scores: Vec<(i32, f32)> = (-range..=range)
+        .filter_map(|k| {
+            let (m, n) = mean_motion_corr(&rs, &os, offset + k as f64 * ostep, tol);
+            (n >= 10).then_some((k, m))
+        })
+        .collect();
+    let Some(&(best_k, best)) = scores.iter().max_by(|a, b| a.1.total_cmp(&b.1)) else { return Ok(None) };
+    // A clear winner only: enough motion, and well above every other offset.
+    let runner_up = scores.iter().filter(|(k, _)| *k != best_k).map(|(_, m)| *m).fold(f32::MIN, f32::max);
+    if best < 0.05 || best < 1.15 * runner_up {
+        return Ok(None);
+    }
+    Ok(Some(best_k))
+}
+
 /// Suggests `offset_seconds` for `other` relative to `reference`.
 /// `progress(fraction)` is called while decoding. Return `false` to cancel.
 pub fn suggest_offset<P: FnMut(f32) -> bool>(
@@ -286,7 +339,14 @@ pub fn suggest_offset<P: FnMut(f32) -> bool>(
 
     let r_crop = detect_crop(reference, ra, rb)?;
     let o_crop = detect_crop(other, oa, ob)?;
-    let total = ((rb - ra) + (ob - oa)) as f32;
+    // Drift check windows: short, spread through the reference, each decoded from both sources.
+    const CHECK_LEN: f64 = 15.0;
+    let checks: Vec<f64> = (0..opts.drift_checks)
+        .map(|i| r_dur * (0.3 + 0.6 * i as f64 / (opts.drift_checks.max(2) - 1) as f64))
+        .filter(|&t| t + CHECK_LEN <= r_dur)
+        .collect();
+    let fps = (rb - ra) as f64 / len.max(1.0);
+    let total = ((rb - ra) + (ob - oa)) as f32 + (checks.len() as f64 * CHECK_LEN * fps * 2.2) as f32;
     let mut done = 0f32;
     let rs = signatures(reference, ra, rb, r_crop, &mut || {
         done += 32.0;
@@ -434,6 +494,34 @@ pub fn suggest_offset<P: FnMut(f32) -> bool>(
     let confidence = (if cuts_agree { contrast } else { contrast * 0.6 }).clamp(0.0, 1.0);
     // Snap sub-frame offsets to zero: under a quarter of a frame is timestamp rounding (e.g. VFR
     // encodes with millisecond timestamps) and never changes which frame time alignment picks.
+    // Drift: re-check the offset at the check windows. Each finds its own best offset within
+    // ±12 frames; the largest difference from the suggestion is reported.
+    let (mut drift_frames, mut drift_at, mut drift_checked) = (0u32, None, 0usize);
+    for &t0 in &checks {
+        let local = local_drift(reference, other, (r_crop, o_crop), t0, CHECK_LEN, offset, ostep, 12, &mut || {
+            done += 32.0;
+            progress((done / total).min(1.0))
+        })?;
+        if let Some(k) = local {
+            drift_checked += 1;
+            if k.unsigned_abs() > drift_frames {
+                drift_frames = k.unsigned_abs();
+                drift_at = Some(t0);
+            }
+        }
+    }
     let offset = if offset.abs() < 0.25 * ostep { 0.0 } else { (offset * 1000.0).round() / 1000.0 };
-    Ok(SyncSuggestion { offset_seconds: offset, confidence, correlation, baseline, ref_cuts: rc.len(), matched_cuts: matched, precision_frames: spread, method })
+    Ok(SyncSuggestion {
+        offset_seconds: offset,
+        confidence,
+        correlation,
+        baseline,
+        ref_cuts: rc.len(),
+        matched_cuts: matched,
+        precision_frames: spread,
+        method,
+        drift_frames,
+        drift_at,
+        drift_checked,
+    })
 }

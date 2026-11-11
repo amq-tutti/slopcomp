@@ -1279,7 +1279,7 @@ impl App {
                             let busy = matches!(self.sync.suggestions.get(&i), Some(None));
                             if ui
                                 .add_enabled(ready && !busy, egui::Button::new("Auto"))
-                                .on_hover_text("Find the offset by matching scene cuts (decodes about a minute of video)")
+                                .on_hover_text("Find the offset by matching scene cuts, then re-check it at a few later points to catch drift (decodes about two minutes of video)")
                                 .clicked()
                             {
                                 ask.push(i);
@@ -1311,6 +1311,18 @@ impl App {
                                         "{}: {} of {} cuts matched; correlation {:.2} vs {:.2} at wrong offsets",
                                         sg.method, sg.matched_cuts, sg.ref_cuts, sg.correlation, sg.baseline
                                     ));
+                                    if sg.drift_frames >= 2 {
+                                        let at = sg
+                                            .drift_at
+                                            .map(|t| format!(" Largest around {}:{:02} (reference time).", (t / 60.0) as u32, (t % 60.0) as u32))
+                                            .unwrap_or_default();
+                                        theme::pill(ui, &format!("drifts {} f", sg.drift_frames), theme::WARN).on_hover_text(format!(
+                                            "Later in the episode the best offset is up to {} frames different: this source's timing \
+                                             shifts within the episode, so one offset can't fit everywhere.{at} Check those parts \
+                                             in the previews.",
+                                            sg.drift_frames
+                                        ));
+                                    }
                                     if ui.button("Apply").clicked() {
                                         os = sg.offset_seconds;
                                         of = 0;

@@ -27,7 +27,7 @@ fn finds_known_offsets() {
         eprintln!("SKIP: corpus missing");
         return;
     }
-    let opts = SyncOptions { window_start: Some(8.0), window_len: 40.0, search: 10.0 };
+    let opts = SyncOptions { window_start: Some(8.0), window_len: 40.0, search: 10.0, ..Default::default() };
 
     let mut r = plain("cuts_ref.mkv");
     let mut o = plain("cuts_late_dvd.mpg");
@@ -70,7 +70,7 @@ fn unrelated_content_has_low_confidence() {
     // Blurred test pattern vs a Mandelbrot zoom (cuts_black.mkv frames 144+, from 6 s): no relation.
     let mut r = plain("ivtc_truth_ffv1.mkv");
     let mut o = plain("cuts_black.mkv");
-    let opts = SyncOptions { window_start: Some(6.5), window_len: 3.0, search: 0.4 };
+    let opts = SyncOptions { window_start: Some(6.5), window_len: 3.0, search: 0.4, drift_checks: 0 };
     let s = suggest_offset(&mut r, &mut o, &opts, |_| true).unwrap();
     eprintln!("unrelated: {s:?}");
     assert!(s.confidence < 0.25, "{s:?}");
