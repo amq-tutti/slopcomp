@@ -10,6 +10,8 @@ its notes.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-11
+
 First public release.
 
 ### Added
@@ -52,4 +54,5 @@ First public release.
   is the first Windows build, so please report anything that goes wrong.
 - `SHA256SUMS.txt` has the checksums of every download.
 
-[Unreleased]: https://github.com/amq-tutti/anime-comp/commits/HEAD
+[Unreleased]: https://github.com/amq-tutti/anime-comp/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/amq-tutti/anime-comp/releases/tag/v0.1.0
