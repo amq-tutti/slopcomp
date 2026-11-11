@@ -972,7 +972,12 @@ mod tests {
         comp(&root.join(".hidden/Skipped"));
         fs::create_dir_all(root.join("empty/stuff")).unwrap();
 
-        let rel = |v: Vec<std::path::PathBuf>| v.iter().map(|p| p.strip_prefix(&root).unwrap().display().to_string()).collect::<Vec<_>>();
+        // Relative paths with "/" on every platform (Windows prints "\").
+        let rel = |v: Vec<std::path::PathBuf>| {
+            v.iter()
+                .map(|p| p.strip_prefix(&root).unwrap().components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(rel(find_comparisons(&root)), ["Movie", "Show/E01", "Show/E02", "deep/a/b/c/Nested"]);
         // A comparison folder itself: just that one.
         assert_eq!(rel(find_comparisons(&root.join("Movie"))), ["Movie"]);

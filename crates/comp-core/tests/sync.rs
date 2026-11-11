@@ -27,15 +27,19 @@ fn finds_known_offsets() {
         eprintln!("SKIP: corpus missing");
         return;
     }
-    let opts = SyncOptions { window_start: Some(8.0), window_len: 40.0, search: 10.0, ..Default::default() };
+    // The drift check decodes extra windows, which is slow on CI runners (especially through IVTC),
+    // so only the DVD case runs it; the clips don't drift, so it must report none.
+    let opts = SyncOptions { window_start: Some(8.0), window_len: 40.0, search: 10.0, drift_checks: 0 };
+    let with_drift = SyncOptions { drift_checks: 2, ..opts.clone() };
 
     let mut r = plain("cuts_ref.mkv");
     let mut o = plain("cuts_late_dvd.mpg");
-    let s = suggest_offset(&mut r, &mut o, &opts, |_| true).unwrap();
+    let s = suggest_offset(&mut r, &mut o, &with_drift, |_| true).unwrap();
     eprintln!("DVD: {s:?}");
     assert!((s.offset_seconds - EXPECTED).abs() < 0.021, "{s:?}");
     assert!(s.precision_frames <= 1, "{s:?}");
     assert!(s.confidence > 0.5, "{s:?}");
+    assert_eq!(s.drift_frames, 0, "no drift in the test clips: {s:?}");
 
     let vs = VideoSource::open(&corpus("cuts_late_telecined.mkv"), &OpenOptions::default()).unwrap();
     let mut o = AnySource::Filtered(Box::new(
