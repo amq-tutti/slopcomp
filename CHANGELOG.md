@@ -10,6 +10,13 @@ its notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- The automatic offset suggestion could land a couple of frames off (and report its precision
+  as ±2 frames) when the frames either side of the right offset looked alike, which happened most
+  with telecined (IVTC) sources. The final frame is now chosen by matching frame-to-frame motion,
+  which only lines up at the exact offset.
+
 ## [0.1.0] - 2026-11-11
 
 First public release.

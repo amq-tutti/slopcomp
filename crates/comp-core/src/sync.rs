@@ -219,6 +219,51 @@ fn mean_corr_n(rs: &[Sig], os: &[Sig], offset: f64, tol: f64, samples: usize) ->
     (if n > 0 { sum / n as f32 } else { 0.0 }, n)
 }
 
+/// Index of the signature nearest to time `t`, if within `tol`.
+fn nearest(os: &[Sig], t: f64, tol: f64) -> Option<usize> {
+    let i = os.partition_point(|o| o.t < t);
+    [i.wrapping_sub(1), i]
+        .into_iter()
+        .filter(|&j| j < os.len())
+        .min_by(|&a, &b| (os[a].t - t).abs().total_cmp(&(os[b].t - t).abs()))
+        .filter(|&j| (os[j].t - t).abs() <= tol)
+}
+
+/// Mean correlation of frame-to-frame *changes* at `offset`: for each reference frame with motion,
+/// the change from its previous frame against the change between the other source's frames at the
+/// same two times. Unlike whole-thumbnail correlation, this only peaks at the exact alignment
+/// (still areas contribute nothing), so it pins the last frame down.
+fn mean_motion_corr(rs: &[Sig], os: &[Sig], offset: f64, tol: f64) -> (f32, usize) {
+    let (mut sum, mut n) = (0f32, 0usize);
+    let mut rd = vec![0f32; GRID * GRID];
+    let mut od = vec![0f32; GRID * GRID];
+    for w in rs.windows(2) {
+        let (Some(j0), Some(j1)) = (nearest(os, w[0].t + offset, tol), nearest(os, w[1].t + offset, tol)) else {
+            continue;
+        };
+        if j0 == j1 {
+            continue;
+        }
+        for k in 0..GRID * GRID {
+            rd[k] = w[1].thumb[k] - w[0].thumb[k];
+            od[k] = os[j1].thumb[k] - os[j0].thumb[k];
+        }
+        // Skip still frames: no change to line up.
+        if rd.iter().map(|v| v.abs()).sum::<f32>() < 0.004 * rd.len() as f32 {
+            continue;
+        }
+        let (mut sab, mut saa, mut sbb) = (0f32, 0f32, 0f32);
+        for k in 0..rd.len() {
+            sab += rd[k] * od[k];
+            saa += rd[k] * rd[k];
+            sbb += od[k] * od[k];
+        }
+        sum += if sbb < 1e-9 { 0.0 } else { sab / (saa * sbb).sqrt() };
+        n += 1;
+    }
+    (if n > 0 { sum / n as f32 } else { 0.0 }, n)
+}
+
 /// Suggests `offset_seconds` for `other` relative to `reference`.
 /// `progress(fraction)` is called while decoding. Return `false` to cancel.
 pub fn suggest_offset<P: FnMut(f32) -> bool>(
@@ -316,8 +361,12 @@ pub fn suggest_offset<P: FnMut(f32) -> bool>(
     };
     // Fine search: the cut vote is only accurate to about a frame (more where frame grids differ,
     // e.g. VFR 29.97 sections against a decimated 23.976 encode). Score every offset within ±3
-    // frames of the voted one, and of zero, on all frames. During motion the exact alignment wins.
-    // Ties go to the offset closer to zero.
+    // frames of the voted one, and of zero. Ties go to the offset closer to zero.
+    //
+    // Scoring uses frame-to-frame changes (`mean_motion_corr`), which only peak at the exact
+    // alignment. Whole-thumbnail correlation barely changes a frame or two either side, so encode
+    // or IVTC noise could pick the wrong neighbour; it's the fallback for windows with too little
+    // motion to score.
     let ostep = median_step(&os);
     let mut cands: Vec<f64> = Vec::new();
     for base in [offset, 0.0] {
@@ -328,22 +377,43 @@ pub fn suggest_offset<P: FnMut(f32) -> bool>(
             }
         }
     }
-    let mut fine = (f32::MIN, offset);
-    let mut scored: Vec<(f64, f32)> = Vec::new();
+    struct Scored {
+        offset: f64,
+        motion: f32,
+        motion_frames: usize,
+        thumb: f32,
+    }
+    let mut scored: Vec<Scored> = Vec::new();
     for d in cands {
         let (c, n) = mean_corr_n(&rs, &os, d, tol, usize::MAX);
         if n < 10 {
             continue;
         }
-        scored.push((d, c));
-        if c > fine.0 + 1e-4 || ((c - fine.0).abs() <= 1e-4 && d.abs() < fine.1.abs()) {
-            fine = (c, d);
-        }
+        let (m, mn) = mean_motion_corr(&rs, &os, d, tol);
+        scored.push(Scored { offset: d, motion: m, motion_frames: mn, thumb: c });
     }
-    let offset = fine.1;
+    // Best (score, offset); ties go to the offset closer to zero.
+    let pick = |score: fn(&Scored) -> f32| -> (f32, f64) {
+        let mut best = (f32::MIN, offset);
+        for e in &scored {
+            let c = score(e);
+            if c > best.0 + 1e-4 || ((c - best.0).abs() <= 1e-4 && e.offset.abs() < best.1.abs()) {
+                best = (c, e.offset);
+            }
+        }
+        best
+    };
+    let by_motion = pick(|e| e.motion);
+    let use_motion = by_motion.0 >= 0.02 && scored.iter().all(|e| e.motion_frames >= 10);
     // Precision: neighbouring offsets that score almost as well (static shots, blended frames,
     // differently decimated releases) mean the last frame or two can't be pinned down.
-    let near: Vec<f64> = scored.iter().filter(|(_, c)| *c >= fine.0 - 0.004).map(|(d, _)| *d).collect();
+    let (offset, near): (f64, Vec<f64>) = if use_motion {
+        let (best, d) = by_motion;
+        (d, scored.iter().filter(|e| e.motion >= 0.9 * best).map(|e| e.offset).collect())
+    } else {
+        let (best, d) = pick(|e| e.thumb);
+        (d, scored.iter().filter(|e| e.thumb >= best - 0.004).map(|e| e.offset).collect())
+    };
     let spread = near.iter().map(|d| ((d - offset) / ostep).abs().round() as u32).max().unwrap_or(0);
     let (correlation, _) = mean_corr(&rs, &os, offset, tol);
     // Baseline: correlation at deliberately wrong offsets (several seconds away, outside the same
