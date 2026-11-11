@@ -67,11 +67,20 @@ fn offsets_align_content() {
     }
     let aligned_frames = mean_psnr("offset_frames", -24, 0.0);
     let aligned_secs = mean_psnr("offset_seconds", 0, -1.001);
+    let early = mean_psnr("offset_early", -23, 0.0);
+    let late = mean_psnr("offset_late", -25, 0.0);
     let misaligned = mean_psnr("offset_none", 0, 0.0);
-    eprintln!("PSNR aligned(frames)={aligned_frames:.1} aligned(seconds)={aligned_secs:.1} misaligned={misaligned:.1}");
-    assert!(aligned_frames > 30.0, "frame offset should align content");
-    assert!(aligned_secs > 30.0, "time offset should align content");
-    assert!(misaligned < aligned_frames - 10.0, "no offset should be clearly misaligned");
+    eprintln!(
+        "PSNR aligned(frames)={aligned_frames:.1} aligned(seconds)={aligned_secs:.1} \
+         off by one={early:.1}/{late:.1} misaligned={misaligned:.1}"
+    );
+    // Absolute PSNR depends on the encoders that made the corpus (about 34 dB with Homebrew's
+    // ffmpeg, 24 dB with Ubuntu 24.04's), so the checks are relative: the right offset must beat
+    // the offsets one frame either side and no offset at all.
+    let best_neighbour = early.max(late);
+    assert!(aligned_frames > best_neighbour + 2.0, "frame offset should align content");
+    assert!(aligned_secs > best_neighbour + 2.0, "time offset should align content");
+    assert!(misaligned < aligned_frames - 8.0, "no offset should be clearly misaligned");
 }
 
 #[test]
