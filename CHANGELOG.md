@@ -10,6 +10,8 @@ its notes.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-12
+
 ### Added
 
 - Sync warns when a source's timing drifts within an episode: Auto re-checks its offset at a few
@@ -81,5 +83,6 @@ First public release.
 - For telecined sources (IVTC), the automatic offset suggestion can occasionally be a couple of
   frames off while still reporting high confidence. Check the Sync previews before applying it.
 
-[Unreleased]: https://github.com/amq-tutti/slopcomp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/amq-tutti/slopcomp/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/amq-tutti/slopcomp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amq-tutti/slopcomp/releases/tag/v0.1.0
