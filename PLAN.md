@@ -221,7 +221,7 @@ Output is human-readable by default, with `--json` for scripting.
 - Linux x64: an AppImage, with the CLI also as a plain static-ish binary. Built on an older glibc base (e.g. manylinux_2_28) for compatibility.
 - Both binaries (`comp` and `anime-comp`) go in each bundle, with the CLI optional on macOS.
 
-**CI:** a GitHub Actions matrix (macos-14 arm64, windows-2022, ubuntu-22.04 or a manylinux container). Jobs: deps (cached by script hash) → `cargo test` → build → package → release on tag.
+**CI:** a GitHub Actions matrix (macos-15 arm64, windows-2022, ubuntu-22.04 or a manylinux container). Jobs: deps (cached by script hash) → `cargo test` → build → package → release on tag.
 Licence: ship `LICENSE` (GPLv3) and the third-party notices for ffmpeg, ffms2, zimg and dav1d.
 
 ## 9. Milestones
