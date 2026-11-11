@@ -67,6 +67,8 @@ struct Job {
     failed: Vec<(String, String)>,
     finished: Option<Result<(), String>>,
     elapsed: f64,
+    /// Local clock time the job ended ("14:02"), shown in the history.
+    finished_at: Option<String>,
 }
 
 pub struct App {
@@ -311,6 +313,7 @@ impl App {
             failed: Vec::new(),
             finished: None,
             elapsed: 0.0,
+            finished_at: None,
         });
         self.tab = Tab::Create;
     }
@@ -321,7 +324,7 @@ impl App {
             match msg {
                 RunMsg::Event(e) => match e {
                     SeasonEvent::Paired(p) => {
-                        run.log.push(format!("{} of {} episodes present in every source", p.complete().count(), p.rows.len()))
+                        run.log.push(stamped(format!("{} of {} episodes found in every source", p.complete().count(), p.rows.len())))
                     }
                     SeasonEvent::EpisodeStarted { index, total, episode } => {
                         run.episode = (index, total, episode.clone());
@@ -334,7 +337,7 @@ impl App {
                             }
                         }
                         if !episode.is_empty() {
-                            run.log.push(format!("== {episode} =="));
+                            run.log.push(stamped(format!("== {episode} ==")));
                         }
                     }
                     SeasonEvent::Episode { event, .. } => match event {
@@ -352,7 +355,7 @@ impl App {
                             if let Some(a) = s.analysis.as_mut() {
                                 *a = 1.0;
                             }
-                            run.log.push(format!(
+                            run.log.push(stamped(format!(
                                 "{}: {}×{} {}-bit, {}, {} frames, {}",
                                 s.label,
                                 info.width,
@@ -366,39 +369,40 @@ impl App {
                                 },
                                 info.num_frames,
                                 info.container
-                            ));
+                            )));
                         }
                         Event::Excluded { ranges } => {
                             for (a, b, why) in ranges {
-                                run.log.push(format!("skipping {:.1}–{:.1} s: {why}", a, b));
+                                run.log.push(stamped(format!("skipping {:.1}–{:.1} s: {why}", a, b)));
                             }
                         }
                         Event::FramesPicked { frames, .. } => {
                             run.shots = (0, frames.len() * run.sources.len());
-                            run.log.push(format!("picked {} frames", frames.len()));
+                            run.log.push(stamped(format!("picked {} frames", frames.len())));
                         }
                         Event::Shot { .. } => run.shots.0 += 1,
                         _ => {}
                     },
                     SeasonEvent::EpisodeDone { result, .. } => {
-                        run.log.push(format!("saved to {}", result.out_dir.display()));
+                        run.log.push(stamped(format!("saved to {}", result.out_dir.display())));
                         self.viewer.add(&result.out_dir);
                         run.results.push(*result);
                     }
                     SeasonEvent::EpisodeFailed { episode, error, .. } => {
-                        run.log.push(format!("{episode} failed: {error}"));
+                        run.log.push(stamped(format!("{episode} failed: {error}")));
                         run.failed.push((episode, error));
                     }
                     SeasonEvent::IndexWritten(_) => {}
                 },
                 RunMsg::Done(res) => {
                     run.elapsed = run.started.elapsed().as_secs_f64();
+                    run.finished_at = Some(chrono::Local::now().format("%H:%M").to_string());
                     match res {
                         Ok(_) => {
                             run.finished = Some(Ok(()));
                         }
                         Err(e) => {
-                            run.log.push(format!("stopped: {e}"));
+                            run.log.push(stamped(format!("stopped: {e}")));
                             run.finished = Some(Err(e));
                         }
                     }
@@ -428,6 +432,21 @@ fn install_fonts(ctx: &egui::Context) {
     mono.insert(0, "plex-mono".to_owned());
     mono.insert(1, "plex-sans-jp".to_owned());
     ctx.set_fonts(fonts);
+}
+
+/// A log line with the local clock time in front: "14:02:31 picked 15 frames".
+fn stamped(msg: impl Into<String>) -> String {
+    format!("{} {}", chrono::Local::now().format("%H:%M:%S"), msg.into())
+}
+
+/// Splits a stamped log line into its time and message (lines without a time return None).
+fn split_stamp(line: &str) -> (Option<&str>, &str) {
+    let b = line.as_bytes();
+    if b.len() > 9 && b[2] == b':' && b[5] == b':' && b[8] == b' ' {
+        (Some(&line[..8]), &line[9..])
+    } else {
+        (None, line)
+    }
 }
 
 /// Frame rate for display: "23.976", "25", "29.97" (up to three decimals, trailing zeros dropped).
@@ -1699,7 +1718,11 @@ fn ui_history_entry(ui: &mut egui::Ui, job: &Job, newest: bool) -> Option<Vec<Pa
     theme::disclosure(ui, id, newest, |ui| {
         ui.label(RichText::new(&job.title).color(theme::TEXT_BRIGHT));
         theme::pill(ui, &status, color);
-        ui.label(RichText::new(format!("{}:{:02}", secs / 60, secs % 60)).color(theme::TEXT_WEAK).monospace());
+        ui.label(RichText::new(format!("{}:{:02}", secs / 60, secs % 60)).color(theme::TEXT_WEAK).monospace())
+            .on_hover_text("How long it took");
+        if let Some(at) = &job.finished_at {
+            ui.label(RichText::new(format!("finished {at}")).color(theme::TEXT_WEAK));
+        }
     },
     |ui| {
         ui.add_space(4.0);
@@ -1753,15 +1776,23 @@ fn ui_log(ui: &mut egui::Ui, job: &Job, id: &str, open: bool) {
                 egui::ScrollArea::vertical().id_salt(id).max_height(240.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 3.0;
                     for l in &job.log {
-                        // Episode headings stand out; failures are red; the rest is quiet.
-                        let col = if l.starts_with("==") {
+                        let (time, msg) = split_stamp(l);
+                        // Episode headings stand out; failures are red; the rest is quiet. Times are dimmer still.
+                        let col = if msg.starts_with("==") {
                             theme::TEXT_BRIGHT
-                        } else if l.contains("failed") || l.starts_with("stopped") {
+                        } else if msg.contains("failed") || msg.starts_with("stopped") {
                             theme::ERR
                         } else {
                             theme::TEXT_WEAK
                         };
-                        ui.label(RichText::new(l).font(egui::FontId::monospace(12.0)).color(col));
+                        let font = egui::FontId::monospace(12.0);
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            if let Some(t) = time {
+                                ui.label(RichText::new(t).font(font.clone()).color(theme::TEXT_WEAK.gamma_multiply(0.6)));
+                            }
+                            ui.add(egui::Label::new(RichText::new(msg).font(font).color(col)).wrap());
+                        });
                     }
                 });
             });
