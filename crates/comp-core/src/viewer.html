@@ -343,7 +343,7 @@ document.addEventListener("keydown", (e) => {
     if (state.mode === "slider") state.b = i; else state.flick = i;
     render();
   }
-  else if (e.key === " ") { e.preventDefault(); if (state.mode !== "flicker") state.mode = "flicker"; state.flick = (state.flick + 1) % n; render(); }
+  else if (e.key === " ") { e.preventDefault(); if (state.mode === "flicker") { state.flick = (state.flick + 1) % n; render(); } }
   else if (e.key === "g" || e.key === "G") setMode("grid");
   else if (e.key === "s" || e.key === "S") setMode("slider");
   else if (e.key === "f" || e.key === "F") setMode("flicker");
