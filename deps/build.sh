@@ -138,7 +138,10 @@ if ! stamp ffms2-$FFMS2_VER; then
   (cd "$BUILD/ffms2" && mkdir -p src/config && autoreconf -fi && \
     CFLAGS="$COMMON_CFLAGS" CXXFLAGS="$COMMON_CXXFLAGS" ./configure --prefix="$PREFIX" \
       --enable-static --disable-shared && \
-    make -j"$JOBS" && make install)
+    # Library, header and .pc only: the ffmsindex tool isn't needed, and newer MinGW GCCs fail to
+    # link it (undefined WinMain).
+    make -j"$JOBS" src/core/libffms2.la && \
+    make install-libLTLIBRARIES install-includeHEADERS install-pkgconfigDATA)
   mark ffms2-$FFMS2_VER
 fi
 
