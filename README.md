@@ -9,10 +9,10 @@
 Line up WEB-DLs, Blu-rays, fansub encodes and DVDs, pick frames automatically,
 and get lossless PNG screenshots ready for slow.pics.
 
-[![Latest release](https://img.shields.io/github/v/release/amq-tutti/anime-comp?label=download&color=8b5cf6)](https://github.com/amq-tutti/anime-comp/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/amq-tutti/slop-comp?label=download&color=8b5cf6)](https://github.com/amq-tutti/slop-comp/releases/latest)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-ec4899)](LICENSE)
 ![macOS · Linux · Windows](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-334155)
-[![CI](https://github.com/amq-tutti/anime-comp/actions/workflows/ci.yml/badge.svg)](https://github.com/amq-tutti/anime-comp/actions/workflows/ci.yml)
+[![CI](https://github.com/amq-tutti/slop-comp/actions/workflows/ci.yml/badge.svg)](https://github.com/amq-tutti/slop-comp/actions/workflows/ci.yml)
 
 [**Download**](#download) · [Features](#features) · [How it works](#how-it-works) · [Command line](#command-line) · [Building](#building-from-source)
 
@@ -42,7 +42,7 @@ and get lossless PNG screenshots ready for slow.pics.
 
 ## Download
 
-Get the latest version from the [**Releases page**](https://github.com/amq-tutti/anime-comp/releases/latest).
+Get the latest version from the [**Releases page**](https://github.com/amq-tutti/slop-comp/releases/latest).
 
 | Platform | File | Notes |
 | --- | --- | --- |
