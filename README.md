@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="docs/images/icon.png" width="128" height="128" alt="SlopComp icon">
-
-# SlopComp
+<h1><img src="docs/images/icon.png" width="128" height="128" alt="SlopComp icon"><br>SlopComp</h1>
 
 **Frame-exact anime source comparisons, without the scripting.**
 
