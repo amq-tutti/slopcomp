@@ -87,6 +87,9 @@ pub struct ProjectSource {
     /// "Ns" for seconds or "N" for frames; several can be combined with commas ("-0.5s,2").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<String>,
+    /// Per-episode offsets for season runs, same format: `episode_offsets = { E02 = "3" }`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub episode_offsets: std::collections::BTreeMap<String, String>,
     /// "auto", "tff" or "bff".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ivtc: Option<String>,

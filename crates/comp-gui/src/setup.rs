@@ -39,6 +39,9 @@ pub struct SourceRow {
     pub order: Order,
     pub offset_seconds: f64,
     pub offset_frames: i32,
+    /// Per-episode offsets (seconds, frames) set in the Sync tab, keyed by episode ("E02").
+    #[serde(default)]
+    pub episode_offsets: std::collections::BTreeMap<String, (f64, i32)>,
     pub matrix: Option<i32>,
 }
 
@@ -51,8 +54,16 @@ impl SourceRow {
             order: Order::Auto,
             offset_seconds: 0.0,
             offset_frames: 0,
+            episode_offsets: Default::default(),
             matrix: None,
         }
+    }
+
+    /// Offset used for an episode: its own one if set in Sync, else the default.
+    pub fn offset_for(&self, episode: Option<&str>) -> (f64, i32) {
+        episode
+            .and_then(|e| self.episode_offsets.get(e).copied())
+            .unwrap_or((self.offset_seconds, self.offset_frames))
     }
 
     pub fn field_options(&self) -> Option<FieldOptions> {
@@ -88,6 +99,8 @@ pub struct Setup {
     pub stretch_anamorphic: bool,
     /// Detect and crop black borders (pillarbox/letterbox).
     pub crop_borders: bool,
+    /// Episodes unticked in the pairing table (e.g. "E05"); everything else runs.
+    pub skip_episodes: Vec<String>,
 }
 
 impl Default for Setup {
@@ -111,6 +124,7 @@ impl Default for Setup {
             frame_type: None,
             stretch_anamorphic: true,
             crop_borders: true,
+            skip_episodes: Vec::new(),
         }
     }
 }
@@ -190,6 +204,7 @@ impl Setup {
                 if i > 0 {
                     s.offset_seconds = r.offset_seconds;
                     s.offset_frames = r.offset_frames;
+                    s.episode_offsets = r.episode_offsets.clone();
                 }
                 s.matrix_override = r.matrix;
                 s.field = r.field_options();
@@ -258,7 +273,18 @@ impl Setup {
                     if r.offset_frames != 0 {
                         offs.push(r.offset_frames.to_string());
                     }
+                    let fmt = |(s, f): (f64, i32)| {
+                        let mut v = Vec::new();
+                        if s != 0.0 {
+                            v.push(format!("{s}s"));
+                        }
+                        if f != 0 || v.is_empty() {
+                            v.push(f.to_string());
+                        }
+                        v.join(",")
+                    };
                     ProjectSource {
+                        episode_offsets: r.episode_offsets.iter().map(|(e, o)| (e.clone(), fmt(*o))).collect(),
                         label: r.label.clone(),
                         path: PathBuf::from(&r.path),
                         offset: (!offs.is_empty()).then(|| offs.join(",")),
@@ -308,6 +334,18 @@ impl Setup {
                 } else if !part.is_empty() {
                     r.offset_frames += part.parse::<i32>().map_err(|_| format!("bad offset '{part}'"))?;
                 }
+            }
+            for (ep, o) in &ps.episode_offsets {
+                let (mut s, mut f) = (0.0, 0);
+                for part in o.split(',') {
+                    let part = part.trim();
+                    if let Some(sec) = part.strip_suffix('s') {
+                        s += sec.parse::<f64>().map_err(|_| format!("bad offset '{part}'"))?;
+                    } else if !part.is_empty() {
+                        f += part.parse::<i32>().map_err(|_| format!("bad offset '{part}'"))?;
+                    }
+                }
+                r.episode_offsets.insert(ep.clone(), (s, f));
             }
             r.matrix = match ps.matrix.as_deref() {
                 None => None,

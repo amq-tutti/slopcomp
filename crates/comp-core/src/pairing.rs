@@ -156,6 +156,18 @@ pub fn parse_episode(name: &str) -> Option<EpisodeId> {
     None
 }
 
+/// Normalises a user-typed episode ("2", "e02", "ncop1") to the displayed form ("E02", "NCOP1").
+pub fn normalize_episode(s: &str) -> String {
+    let t = s.trim();
+    let digits = t.strip_prefix(['e', 'E']).unwrap_or(t);
+    if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+        if let Ok(n) = digits.parse::<u32>() {
+            return EpisodeId::episode(n).to_string();
+        }
+    }
+    t.to_uppercase()
+}
+
 /// One row of the pairing table: an episode and the matching file in each source (if any).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairRow {
@@ -273,6 +285,14 @@ mod tests {
         assert_eq!(p.duplicates.len(), 1);
         assert_eq!(p.rows[2].files[1].as_deref(), Some(Path::new("Show_03v2_DVD.mkv")));
         assert_eq!(p.unparsed[1], vec![PathBuf::from("notes.mkv")]);
+    }
+
+    #[test]
+    fn normalizes_typed_episodes() {
+        assert_eq!(normalize_episode("2"), "E02");
+        assert_eq!(normalize_episode("e12"), "E12");
+        assert_eq!(normalize_episode("E101"), "E101");
+        assert_eq!(normalize_episode("ncop1"), "NCOP1");
     }
 
     #[test]

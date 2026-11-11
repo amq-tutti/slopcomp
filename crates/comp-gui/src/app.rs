@@ -15,9 +15,9 @@ use crate::setup::{label_for, random_seed, Field, Order, Setup, SourceRow, MATRI
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
-    Sources,
+    Select,
     Sync,
-    Run,
+    Create,
     Viewer,
 }
 
@@ -47,7 +47,10 @@ struct SourceProgress {
     opened: bool,
 }
 
-struct RunState {
+/// One comparison being (or having been) created. Kept for the session as history.
+struct Job {
+    /// "Name · N episodes", fixed when the job starts.
+    title: String,
     rx: Receiver<RunMsg>,
     cancel: Arc<AtomicBool>,
     started: Instant,
@@ -57,7 +60,6 @@ struct RunState {
     shots: (usize, usize),
     results: Vec<CompResult>,
     failed: Vec<(String, String)>,
-    index: Option<PathBuf>,
     finished: Option<Result<(), String>>,
     elapsed: f64,
 }
@@ -68,14 +70,13 @@ pub struct App {
     pairing: Option<(Vec<String>, Result<Pairing, String>)>,
     worker: preview::Worker,
     sync: SyncState,
-    run: Option<RunState>,
+    /// This session's jobs, oldest first; only the last can still be running.
+    jobs: Vec<Job>,
     toast: Option<(String, bool, Instant)>,
     project_path: Option<PathBuf>,
     /// Developer flag --auto-sync: request offset suggestions once the sync sources are open.
     auto_sync: bool,
     viewer: crate::viewer::Viewer,
-    /// Comparison folders from this session (newest last), for the viewer's picker.
-    recent: Vec<PathBuf>,
 }
 
 const STORAGE_KEY: &str = "setup";
@@ -93,14 +94,14 @@ impl App {
                 project_path = Some(p);
             }
         }
-        // Developer flags: --tab=sources|sync|run, --start (begin a run immediately),
+        // Developer flags: --tab=select|sync|create|viewer, --start (begin a run immediately),
         // --auto-sync (suggest offsets once the sync view has opened its sources).
         let args: Vec<String> = std::env::args().collect();
         let tab = match args.iter().find_map(|a| a.strip_prefix("--tab=")) {
             Some("sync") => Tab::Sync,
-            Some("run") => Tab::Run,
+            Some("create" | "jobs" | "run") => Tab::Create,
             Some("viewer") => Tab::Viewer,
-            _ => Tab::Sources,
+            _ => Tab::Select,
         };
         let autostart = args.iter().any(|a| a == "--start");
         let ctx = cc.egui_ctx.clone();
@@ -121,23 +122,21 @@ impl App {
                 flicker: None,
                 suggestions: Default::default(),
             },
-            run: None,
+            jobs: Vec::new(),
             toast: None,
             project_path,
             auto_sync: args.iter().any(|a| a == "--auto-sync"),
             viewer: crate::viewer::Viewer::new(&cc.egui_ctx),
-            recent: Vec::new(),
         };
 
         app.tab = tab;
         // Developer flag --view=DIR: open a comparison in the viewer.
         if let Some(d) = args.iter().find_map(|a| a.strip_prefix("--view=")) {
             app.viewer.open(Path::new(d));
-            app.recent.push(PathBuf::from(d));
             app.tab = Tab::Viewer;
         }
         if autostart && app.setup.problems().is_empty() {
-            app.start_run(&cc.egui_ctx);
+            app.start_run(&cc.egui_ctx, None);
         }
         app
     }
@@ -147,7 +146,7 @@ impl App {
     }
 
     fn running(&self) -> bool {
-        self.run.as_ref().is_some_and(|r| r.finished.is_none())
+        self.jobs.last().is_some_and(|j| j.finished.is_none())
     }
 
     // ---------------------------------------------------------------- inputs
@@ -164,7 +163,7 @@ impl App {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() && !self.running() {
             self.add_paths(dropped);
-            self.tab = Tab::Sources;
+            self.tab = Tab::Select;
         }
     }
 
@@ -202,12 +201,14 @@ impl App {
         }
     }
 
-    /// Clears sources, name and per-comparison state; keeps settings (output folder, frames, rules).
-    fn new_comparison(&mut self) {
+    /// Clears sources, name and offsets; keeps settings (output folder, frames, rules), the job
+    /// history and the comparisons open in the viewer (those are finished folders on disk).
+    fn clear_comparison(&mut self) {
         self.setup.sources.clear();
         self.setup.name.clear();
         self.setup.frame_type = None;
         self.setup.seed = random_seed();
+        self.setup.skip_episodes.clear();
         self.project_path = None;
         self.pairing = None;
         self.sync.episode = 0;
@@ -218,9 +219,8 @@ impl App {
         self.sync.suggestions.clear();
         self.sync.error = None;
         self.sync.status.clear();
-        self.run = None;
-        self.tab = Tab::Sources;
-        self.notify("New comparison: sources cleared, settings kept", false);
+        self.tab = Tab::Select;
+        self.notify("Cleared sources, name and offsets; settings kept", false);
     }
 
     fn open_project(&mut self) {
@@ -238,11 +238,30 @@ impl App {
 
     // ---------------------------------------------------------------- run
 
-    fn start_run(&mut self, ctx: &egui::Context) {
+    /// Complete episodes (present in every source) when sources are folders; empty otherwise.
+    fn complete_episodes(&mut self) -> Vec<String> {
+        match self.pairing() {
+            Some(Ok(p)) if p.rows.len() > 1 => p.complete().map(|r| r.episode.to_string()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Ticked episodes: None when everything is ticked (or sources aren't folders).
+    fn selected_episodes(&mut self) -> Option<Vec<String>> {
+        let all = self.complete_episodes();
+        if all.is_empty() {
+            return None;
+        }
+        let sel: Vec<String> = all.iter().filter(|e| !self.setup.skip_episodes.contains(e)).cloned().collect();
+        if sel.len() == all.len() { None } else { Some(sel) }
+    }
+
+    fn start_run(&mut self, ctx: &egui::Context, only: Option<Vec<String>>) {
         let cancel = Arc::new(AtomicBool::new(false));
         let spec = self.setup.to_spec(Some(cancel.clone()));
         let (tx, rx) = mpsc::channel();
         let ctx2 = ctx.clone();
+        let only_thread = only.clone();
         std::thread::Builder::new()
             .name("comparison".into())
             .spawn(move || {
@@ -250,11 +269,18 @@ impl App {
                     let _ = tx.send(m);
                     ctx2.request_repaint();
                 };
-                let res = season::run(&spec, &|e| send(RunMsg::Event(e)));
+                let res = season::run(&spec, only_thread.as_deref(), &|e| send(RunMsg::Event(e)));
                 send(RunMsg::Done(res.map_err(|e| e.to_string())));
             })
             .expect("spawn comparison thread");
-        self.run = Some(RunState {
+        let n = only.as_ref().map(|v| v.len()).unwrap_or_else(|| self.complete_episodes().len());
+        let title = match &only {
+            Some(v) if v.len() == 1 => format!("{} · {}", self.setup.display_name(), v[0]),
+            _ if n > 1 => format!("{} · {n} episodes", self.setup.display_name()),
+            _ => self.setup.display_name(),
+        };
+        self.jobs.push(Job {
+            title,
             rx,
             cancel,
             started: Instant::now(),
@@ -274,15 +300,14 @@ impl App {
             shots: (0, 0),
             results: Vec::new(),
             failed: Vec::new(),
-            index: None,
             finished: None,
             elapsed: 0.0,
         });
-        self.tab = Tab::Run;
+        self.tab = Tab::Create;
     }
 
     fn pump_run(&mut self) {
-        let Some(run) = self.run.as_mut() else { return };
+        let Some(run) = self.jobs.last_mut() else { return };
         while let Ok(msg) = run.rx.try_recv() {
             match msg {
                 RunMsg::Event(e) => match e {
@@ -337,22 +362,19 @@ impl App {
                     },
                     SeasonEvent::EpisodeDone { result, .. } => {
                         run.log.push(format!("done: {}", result.out_dir.display()));
-                        if !self.recent.contains(&result.out_dir) {
-                            self.recent.push(result.out_dir.clone());
-                        }
+                        self.viewer.add(&result.out_dir);
                         run.results.push(*result);
                     }
                     SeasonEvent::EpisodeFailed { episode, error, .. } => {
                         run.log.push(format!("{episode} failed: {error}"));
                         run.failed.push((episode, error));
                     }
-                    SeasonEvent::IndexWritten(p) => run.index = Some(p),
+                    SeasonEvent::IndexWritten(_) => {}
                 },
                 RunMsg::Done(res) => {
                     run.elapsed = run.started.elapsed().as_secs_f64();
                     match res {
-                        Ok(r) => {
-                            run.index = r.index.or(run.index.take());
+                        Ok(_) => {
                             run.finished = Some(Ok(()));
                         }
                         Err(e) => {
@@ -398,7 +420,7 @@ pub fn open_external(target: &Path) {
     let _ = r;
 }
 
-fn open_url(url: &str) {
+pub fn open_url(url: &str) {
     open_external(Path::new(url));
 }
 
@@ -418,11 +440,20 @@ impl eframe::App for App {
                 ui.heading("Anime Comparisons");
                 ui.add_space(12.0);
                 let running = self.running();
-                for (tab, name) in [(Tab::Sources, "1  Sources"), (Tab::Sync, "2  Sync"), (Tab::Run, "3  Run"), (Tab::Viewer, "4  Viewer")] {
-                    let enabled = !(running && tab != Tab::Run);
-                    if ui.add_enabled(enabled, egui::SelectableLabel::new(self.tab == tab, name)).clicked() {
+                // Numbered tabs are the steps to make a comparison; the viewer stands apart (it also
+                // opens earlier comparisons) and stays usable while a job runs.
+                for (tab, name) in [(Tab::Select, "1  Select"), (Tab::Sync, "2  Sync"), (Tab::Create, "3  Create")] {
+                    let enabled = !(running && tab != Tab::Create);
+                    let r = ui
+                        .add_enabled(enabled, egui::SelectableLabel::new(self.tab == tab, name))
+                        .on_disabled_hover_text("Locked while a comparison is being created");
+                    if r.clicked() {
                         self.tab = tab;
                     }
+                }
+                ui.separator();
+                if ui.selectable_label(self.tab == Tab::Viewer, "Viewer").clicked() {
+                    self.tab = Tab::Viewer;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(!running, |ui| {
@@ -436,11 +467,11 @@ impl eframe::App for App {
                             self.open_project();
                         }
                         if ui
-                            .button("New")
-                            .on_hover_text("Start a new comparison: clears sources and name, keeps settings")
+                            .button("Clear")
+                            .on_hover_text("Clear sources, name and offsets to start over. Settings, history and comparisons open in the Viewer are kept.")
                             .clicked()
                         {
-                            self.new_comparison();
+                            self.clear_comparison();
                         }
                     });
                 });
@@ -461,21 +492,20 @@ impl eframe::App for App {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
-            Tab::Sources => self.ui_sources(ui, ctx),
+            Tab::Select => self.ui_sources(ui),
             Tab::Sync => self.ui_sync(ui, ctx),
-            Tab::Run => self.ui_run(ui, ctx),
+            Tab::Create => self.ui_create(ui, ctx),
             Tab::Viewer => {
-                let recent = self.recent.clone();
-                self.viewer.ui(ui, ctx, &recent);
+                self.viewer.ui(ui, ctx);
             }
         });
     }
 }
 
-// ==================================================================================== Sources tab
+// ===================================================================================== Select tab
 
 impl App {
-    fn ui_sources(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn ui_sources(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.label(
                 RichText::new("Drop video files or episode folders onto this window, or add them below. The first source is the reference timeline.")
@@ -508,14 +538,37 @@ impl App {
                         egui::CollapsingHeader::new(format!("Episodes: {complete} of {total} present in every source"))
                             .id_salt("pairing")
                             .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("Ticked episodes go into the comparison; unticked ones are never opened.").weak());
+                                    if ui.small_button("All").clicked() {
+                                        self.setup.skip_episodes.clear();
+                                    }
+                                    if ui.small_button("None").clicked() {
+                                        self.setup.skip_episodes = rows.iter().map(|r| r.episode.to_string()).collect();
+                                    }
+                                });
                                 egui::Grid::new("pairs").striped(true).show(ui, |ui| {
+                                    ui.strong("Include");
                                     ui.strong("Episode");
                                     for s in &self.setup.sources {
                                         ui.strong(&s.label);
                                     }
                                     ui.end_row();
                                     for r in &rows {
-                                        ui.label(r.episode.to_string());
+                                        let ep = r.episode.to_string();
+                                        if r.files.iter().all(|f| f.is_some()) {
+                                            let mut on = !self.setup.skip_episodes.contains(&ep);
+                                            if ui.checkbox(&mut on, "").changed() {
+                                                if on {
+                                                    self.setup.skip_episodes.retain(|e| e != &ep);
+                                                } else {
+                                                    self.setup.skip_episodes.push(ep.clone());
+                                                }
+                                            }
+                                        } else {
+                                            ui.label("");
+                                        }
+                                        ui.label(&ep);
                                         for f in &r.files {
                                             match f {
                                                 Some(f) => ui.label(f.file_name().unwrap_or_default().to_string_lossy()),
@@ -542,15 +595,9 @@ impl App {
 
             ui.add_space(14.0);
             let problems = self.setup.problems();
-            ui.horizontal(|ui| {
-                let ok = problems.is_empty();
-                if ui.add_enabled(ok, egui::Button::new(RichText::new("Check sync").strong())).clicked() {
-                    self.tab = Tab::Sync;
-                }
-                if ui.add_enabled(ok, egui::Button::new(RichText::new("Run comparison").strong())).clicked() {
-                    self.start_run(ctx);
-                }
-            });
+            if ui.add_enabled(problems.is_empty(), egui::Button::new(RichText::new("Next: 2  Sync").strong())).clicked() {
+                self.tab = Tab::Sync;
+            }
             for p in problems {
                 ui.label(RichText::new(p).weak());
             }
@@ -631,12 +678,6 @@ impl App {
                                 ui.selectable_value(&mut row.matrix, m, name);
                             }
                         });
-                    if !ref_row {
-                        ui.add_space(10.0);
-                        ui.label("Offset");
-                        ui.add(egui::DragValue::new(&mut row.offset_seconds).speed(0.01).suffix(" s").max_decimals(3));
-                        ui.add(egui::DragValue::new(&mut row.offset_frames).speed(0.2).suffix(" f"));
-                    }
                 });
             });
             ui.add_space(4.0);
@@ -833,13 +874,8 @@ impl App {
                         }
                     });
             }
-            let can_run = self.setup.problems().is_empty() && !self.running();
-            if ui
-                .add_enabled(can_run, egui::Button::new(RichText::new("Run comparison").strong()))
-                .on_hover_text("Run with these offsets and the current settings")
-                .clicked()
-            {
-                self.start_run(ui.ctx());
+            if ui.button(RichText::new("Next: 3  Create").strong()).on_hover_text("Review the setup and create the comparison").clicked() {
+                self.tab = Tab::Create;
             }
             if let Some((n, times)) = &self.sync.ready {
                 let n = *n;
@@ -873,23 +909,27 @@ impl App {
             ui.colored_label(Color32::from_rgb(220, 80, 80), e);
         }
 
-        // Offsets for non-reference sources, with automatic suggestions.
+        // Offsets for non-reference sources, with automatic suggestions. With episode folders, edits
+        // here apply to the episode on screen only (stored as an override of the default).
         let ready = self.sync.ready.is_some();
+        let cur_ep: Option<String> = (episodes.len() > 1).then(|| episodes.get(self.sync.episode).cloned()).flatten();
         let mut ask: Vec<usize> = Vec::new();
         ui.horizontal_wrapped(|ui| {
             for (i, r) in self.setup.sources.iter_mut().enumerate().skip(1) {
                 ui.group(|ui| {
                     ui.vertical(|ui| {
+                        let (mut os, mut of) = r.offset_for(cur_ep.as_deref());
+                        let before = (os, of);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&r.label).strong());
                             if ui.small_button("-1").clicked() {
-                                r.offset_frames -= 1;
+                                of -= 1;
                             }
-                            ui.add(egui::DragValue::new(&mut r.offset_frames).speed(0.2).suffix(" f"));
+                            ui.add(egui::DragValue::new(&mut of).speed(0.2).suffix(" f"));
                             if ui.small_button("+1").clicked() {
-                                r.offset_frames += 1;
+                                of += 1;
                             }
-                            ui.add(egui::DragValue::new(&mut r.offset_seconds).speed(0.01).suffix(" s").max_decimals(3));
+                            ui.add(egui::DragValue::new(&mut os).speed(0.01).suffix(" s").max_decimals(3));
                             let busy = matches!(self.sync.suggestions.get(&i), Some(None));
                             if ui
                                 .add_enabled(ready && !busy, egui::Button::new("Auto").small())
@@ -926,8 +966,8 @@ impl App {
                                         sg.method, sg.matched_cuts, sg.ref_cuts, sg.correlation, sg.baseline
                                     ));
                                     if ui.small_button("Apply").clicked() {
-                                        r.offset_seconds = sg.offset_seconds;
-                                        r.offset_frames = 0;
+                                        os = sg.offset_seconds;
+                                        of = 0;
                                     }
                                 });
                             }
@@ -935,6 +975,37 @@ impl App {
                                 ui.colored_label(Color32::from_rgb(220, 80, 80), RichText::new(e).small());
                             }
                             None => {}
+                        }
+                        // Store edits: per episode when browsing episodes, else as the default.
+                        if (os, of) != before {
+                            match &cur_ep {
+                                Some(ep) => {
+                                    r.episode_offsets.insert(ep.clone(), (os, of));
+                                }
+                                None => {
+                                    r.offset_seconds = os;
+                                    r.offset_frames = of;
+                                }
+                            }
+                        }
+                        if let Some(ep) = &cur_ep {
+                            ui.horizontal(|ui| {
+                                if r.episode_offsets.contains_key(ep) {
+                                    ui.label(RichText::new(format!("{ep} only")).small().color(Color32::from_rgb(220, 170, 60)))
+                                        .on_hover_text("This episode has its own offset; other episodes use the default offset");
+                                    if ui.small_button("Use for all episodes").on_hover_text("Make this the default and clear every episode's own offset").clicked() {
+                                        r.offset_seconds = os;
+                                        r.offset_frames = of;
+                                        r.episode_offsets.clear();
+                                    }
+                                    if ui.small_button("Reset").on_hover_text("Go back to the default offset for this episode").clicked() {
+                                        r.episode_offsets.remove(ep);
+                                    }
+                                } else {
+                                    ui.label(RichText::new("default offset").small().weak())
+                                        .on_hover_text("Changing it here sets an offset for this episode only");
+                                }
+                            });
                         }
                     });
                 });
@@ -956,7 +1027,8 @@ impl App {
 
         // Request frames when anything relevant changed.
         if self.sync.ready.is_some() {
-            let offsets: Vec<(f64, i32)> = self.setup.sources.iter().map(|r| (r.offset_seconds, r.offset_frames)).collect();
+            let cur_ep: Option<String> = (episodes.len() > 1).then(|| episodes.get(self.sync.episode).cloned()).flatten();
+            let offsets: Vec<(f64, i32)> = self.setup.sources.iter().map(|r| r.offset_for(cur_ep.as_deref())).collect();
             let req = (self.sync.frame, offsets.clone(), self.setup.stretch_anamorphic, self.setup.crop_borders);
             if self.sync.last_req.as_ref() != Some(&req) {
                 self.worker.send(Request::Frame {
@@ -1039,148 +1111,261 @@ impl App {
     }
 }
 
-// ======================================================================================== Run tab
+// ===================================================================================== Create tab
 
 impl App {
-    fn ui_run(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let Some(run) = self.run.as_mut() else {
-            ui.label("No comparison has run yet.");
-            let ok = self.setup.problems().is_empty();
-            if ui.add_enabled(ok, egui::Button::new("Run comparison")).clicked() {
-                self.start_run(ctx);
-            }
-            return;
-        };
-        let running = run.finished.is_none();
-        ui.horizontal(|ui| {
-            let (i, total, ep) = &run.episode;
-            if *total > 1 {
-                ui.label(format!("Episode {} of {total}  {ep}", i + 1));
-            }
-            let secs = if running { run.started.elapsed().as_secs_f64() } else { run.elapsed };
-            ui.label(RichText::new(format!("{:.0}s", secs)).weak());
-            if running {
-                ui.spinner();
-                if ui.button("Cancel").clicked() {
-                    run.cancel.store(true, Ordering::Relaxed);
-                }
-                ctx.request_repaint_after(std::time::Duration::from_millis(250));
-            }
-        });
-        if run.episode.1 > 1 {
-            let done = run.results.len() + run.failed.len();
-            ui.add(egui::ProgressBar::new(done as f32 / run.episode.1 as f32).text(format!("{done}/{} episodes", run.episode.1)));
-        }
-        ui.add_space(6.0);
-        if running {
-            egui::Grid::new("progress").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
-                for s in &run.sources {
-                    ui.label(&s.label);
-                    ui.add(
-                        egui::ProgressBar::new(s.indexing)
-                            .desired_width(220.0)
-                            .text(if s.indexing >= 1.0 { "indexed".to_string() } else { format!("indexing {:.0}%", s.indexing * 100.0) }),
-                    );
-                    match s.analysis {
-                        Some(a) => ui.add(
-                            egui::ProgressBar::new(a)
-                                .desired_width(220.0)
-                                .text(if a >= 1.0 { "fields analysed".to_string() } else { format!("field analysis {:.0}%", a * 100.0) }),
-                        ),
-                        None => ui.label(""),
-                    };
-                    ui.end_row();
-                }
-            });
-            if run.shots.1 > 0 {
-                ui.add(egui::ProgressBar::new(run.shots.0 as f32 / run.shots.1 as f32).text(format!("screenshots {}/{}", run.shots.0, run.shots.1)));
-            }
-        }
+    /// Step 3: what will be made, the button that makes it, the job in progress, and this session's history.
+    fn ui_create(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let running = self.running();
+        let mut view: Option<PathBuf> = None;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.heading("Comparison");
+            ui.add_space(4.0);
+            self.ui_summary(ui);
 
-        match &run.finished {
-            Some(Ok(())) => {
-                ui.add_space(8.0);
-                ui.heading(format!("Done: {} comparison{}", run.results.len(), if run.results.len() == 1 { "" } else { "s" }));
-                let mut view: Option<PathBuf> = None;
-                ui.horizontal(|ui| {
-                    if let Some(first) = run.results.first() {
-                        if ui.button(RichText::new("Open in viewer").strong()).on_hover_text("View and adjust frames in the app").clicked() {
-                            view = Some(first.out_dir.clone());
-                        }
-                    }
-                    if let Some(idx) = &run.index {
-                        if ui.button("Open HTML viewer").clicked() {
-                            open_external(idx);
-                        }
-                        if let Some(dir) = idx.parent() {
-                            if ui.button("Show folder").clicked() {
-                                open_external(dir);
-                            }
-                            if ui
-                                .button("Upload to slow.pics manually…")
-                                .on_hover_text("Opens the folder and slow.pics' upload page. Drag the PNGs in; names sort frame by frame.")
-                                .clicked()
-                            {
-                                open_external(dir);
-                                open_url("https://slow.pics/comparison");
-                            }
-                        }
-                    }
-                });
-                if run.results.len() > 1 {
-                    egui::Grid::new("results").striped(true).show(ui, |ui| {
-                        for r in &run.results {
-                            ui.label(&r.name);
-                            ui.label(format!("{} frames", r.frames.len()));
-                            if ui.small_button("View").clicked() {
-                                view = Some(r.out_dir.clone());
-                            }
-                            if ui.small_button("HTML").clicked() {
-                                open_external(&r.out_dir.join("index.html"));
-                            }
-                            ui.end_row();
-                        }
-                    });
-                }
-                for (ep, e) in &run.failed {
-                    ui.colored_label(Color32::from_rgb(220, 80, 80), format!("{ep}: {e}"));
-                }
-                if let Some(d) = view {
-                    self.viewer.open(&d);
-                    self.tab = Tab::Viewer;
-                }
-            }
-            Some(Err(e)) => {
-                ui.colored_label(Color32::from_rgb(220, 80, 80), format!("Stopped: {e}"));
-            }
-            None => {}
-        }
-
-        ui.add_space(8.0);
-        egui::CollapsingHeader::new("Log").default_open(true).show(ui, |ui| {
-            egui::ScrollArea::vertical().max_height(260.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
-                for l in &run.log {
-                    ui.label(RichText::new(l).monospace().small());
-                }
-            });
-        });
-        if !running {
+            ui.add_space(10.0);
             let problems = self.setup.problems();
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(problems.is_empty(), egui::Button::new(RichText::new("Run again").strong()))
-                    .on_hover_text("Run with the current settings (including offsets changed in Sync). Replaces this comparison's shots.")
-                    .clicked()
-                {
-                    self.start_run(ctx);
-                }
-                if ui.button("Back to sources").clicked() {
-                    self.tab = Tab::Sources;
-                }
-            });
+            let sel = self.selected_episodes();
+            let none = sel.as_ref().is_some_and(|v| v.is_empty());
+            let text = match &sel {
+                Some(v) if v.len() == 1 => format!("Create comparison of {}", v[0]),
+                Some(v) => format!("Create comparisons of {} episodes", v.len()),
+                None if self.complete_episodes().len() > 1 => format!("Create comparisons of {} episodes", self.complete_episodes().len()),
+                None => "Create comparison".to_string(),
+            };
+            let hover = if running {
+                "A comparison is already being created"
+            } else if none {
+                "No episodes ticked in 1  Select"
+            } else {
+                "Existing comparisons with the same name are replaced"
+            };
+            if ui
+                .add_enabled(problems.is_empty() && !none && !running, egui::Button::new(RichText::new(text).strong()))
+                .on_hover_text(hover)
+                .on_disabled_hover_text(hover)
+                .clicked()
+            {
+                self.start_run(ctx, sel);
+            }
             for p in problems {
                 ui.label(RichText::new(p).weak());
             }
+
+            if let Some(job) = self.jobs.last_mut().filter(|j| j.finished.is_none()) {
+                ui.add_space(14.0);
+                ui.separator();
+                ui.heading("In progress");
+                ui.add_space(4.0);
+                ui_progress(ui, ctx, job);
+            }
+
+            let done = self.jobs.iter().filter(|j| j.finished.is_some()).count();
+            if done > 0 {
+                ui.add_space(14.0);
+                ui.separator();
+                ui.heading("History");
+                ui.label(RichText::new("Comparisons created since the app was opened, newest first.").small().weak());
+                ui.add_space(4.0);
+                let n = self.jobs.len();
+                for (k, job) in self.jobs.iter().enumerate().rev().filter(|(_, j)| j.finished.is_some()) {
+                    if let Some(d) = ui_history_entry(ui, job, k + 1 == n) {
+                        view = Some(d);
+                    }
+                }
+            }
+        });
+        if let Some(d) = view {
+            self.viewer.open(&d);
+            self.tab = Tab::Viewer;
         }
     }
+
+    /// Read-only overview of what the Create button will make.
+    fn ui_summary(&mut self, ui: &mut egui::Ui) {
+        let all = self.complete_episodes();
+        let sel = self.selected_episodes();
+        let s = &self.setup;
+        let weak = |t: String| RichText::new(t).weak();
+        egui::Grid::new("summary").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
+            ui.label("Name");
+            ui.label(s.display_name());
+            ui.end_row();
+
+            ui.label("Output folder");
+            ui.label(if s.out_dir.trim().is_empty() { weak("not set".into()) } else { RichText::new(&s.out_dir) });
+            ui.end_row();
+
+            if !all.is_empty() {
+                ui.label("Episodes");
+                let list = sel.clone().unwrap_or_else(|| all.clone());
+                ui.label(format!("{} of {}: {}", list.len(), all.len(), list.join(", ")));
+                ui.end_row();
+            }
+
+            ui.label("Sources");
+            if s.sources.is_empty() {
+                ui.label(weak("none yet".into()));
+            }
+            ui.vertical(|ui| {
+                egui::Grid::new("summary_sources").num_columns(4).spacing([14.0, 4.0]).show(ui, |ui| {
+                    for (i, r) in s.sources.iter().enumerate() {
+                        ui.strong(&r.label);
+                        let mut fields = match r.field {
+                            Field::Progressive => "progressive".to_string(),
+                            Field::Ivtc => "IVTC".to_string(),
+                            Field::Deinterlace => "deinterlace".to_string(),
+                        };
+                        if r.field != Field::Progressive {
+                            fields += match r.order {
+                                Order::Auto => "",
+                                Order::Tff => " (TFF)",
+                                Order::Bff => " (BFF)",
+                            };
+                        }
+                        let matrix = MATRICES.iter().find(|(m, _)| *m == r.matrix).map(|(_, n)| *n).unwrap_or("?");
+                        ui.label(format!("{fields}, matrix {}", matrix.to_lowercase()));
+                        let offset = if i == 0 {
+                            weak("reference".into())
+                        } else {
+                            let mut t = format!("offset {:+.3} s {:+} f", r.offset_seconds, r.offset_frames);
+                            if !r.episode_offsets.is_empty() {
+                                t += &format!(", own offset for {}", r.episode_offsets.keys().cloned().collect::<Vec<_>>().join(", "));
+                            }
+                            RichText::new(t)
+                        };
+                        ui.label(offset);
+                        ui.label(weak(r.path.clone())).on_hover_text(&r.path);
+                        ui.end_row();
+                    }
+                });
+            });
+            ui.end_row();
+
+            ui.label("Frames");
+            ui.label(format!("{} per episode, seed {}", s.frames, s.seed));
+            ui.end_row();
+
+            let mut skip = Vec::new();
+            if s.skip_black {
+                skip.push(format!("black screens (< {:.2})", s.black_threshold));
+            }
+            for (on, name) in [
+                (s.skip_scene_changes, "scene changes"),
+                (s.skip_duplicates, "near-duplicates"),
+                (s.skip_flat, "flat frames"),
+                (s.exclude_op_ed, "OP/ED"),
+            ] {
+                if on {
+                    skip.push(name.to_string());
+                }
+            }
+            ui.label("Skip");
+            ui.label(if skip.is_empty() { weak("nothing".into()) } else { RichText::new(skip.join(", ")) });
+            ui.end_row();
+
+            if let Some((idx, types)) = &s.frame_type {
+                ui.label("Frame type");
+                ui.label(format!("only {types} frames in {}", s.sources.get(*idx).map(|r| r.label.as_str()).unwrap_or("?")));
+                ui.end_row();
+            }
+
+            ui.label("Picture");
+            let mut pic = Vec::new();
+            if s.stretch_anamorphic {
+                pic.push("stretch anamorphic");
+            }
+            if s.crop_borders {
+                pic.push("crop black borders");
+            }
+            ui.label(if pic.is_empty() { weak("as decoded".into()) } else { RichText::new(pic.join(", ")) });
+            ui.end_row();
+        });
+    }
+}
+
+/// Live progress of the running job.
+fn ui_progress(ui: &mut egui::Ui, ctx: &egui::Context, job: &mut Job) {
+    ui.horizontal(|ui| {
+        ui.strong(&job.title);
+        let (i, total, ep) = &job.episode;
+        if *total > 1 {
+            ui.label(format!("episode {} of {total}  {ep}", i + 1));
+        }
+        ui.label(RichText::new(format!("{:.0}s", job.started.elapsed().as_secs_f64())).weak());
+        ui.spinner();
+        if ui.button("Cancel").clicked() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+    });
+    ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    if job.episode.1 > 1 {
+        let done = job.results.len() + job.failed.len();
+        ui.add(egui::ProgressBar::new(done as f32 / job.episode.1 as f32).text(format!("{done}/{} episodes", job.episode.1)));
+    }
+    egui::Grid::new("progress").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
+        for s in &job.sources {
+            ui.label(&s.label);
+            ui.add(
+                egui::ProgressBar::new(s.indexing)
+                    .desired_width(220.0)
+                    .text(if s.indexing >= 1.0 { "indexed".to_string() } else { format!("indexing {:.0}%", s.indexing * 100.0) }),
+            );
+            match s.analysis {
+                Some(a) => ui.add(
+                    egui::ProgressBar::new(a)
+                        .desired_width(220.0)
+                        .text(if a >= 1.0 { "fields analysed".to_string() } else { format!("field analysis {:.0}%", a * 100.0) }),
+                ),
+                None => ui.label(""),
+            };
+            ui.end_row();
+        }
+    });
+    if job.shots.1 > 0 {
+        ui.add(egui::ProgressBar::new(job.shots.0 as f32 / job.shots.1 as f32).text(format!("screenshots {}/{}", job.shots.0, job.shots.1)));
+    }
+    ui_log(ui, job, "log_running", true);
+}
+
+/// One finished job: outcome, its comparisons (open in the viewer), failures and log.
+/// Returns a comparison folder to open in the viewer when one was clicked.
+fn ui_history_entry(ui: &mut egui::Ui, job: &Job, newest: bool) -> Option<PathBuf> {
+    let mut view = None;
+    let (status, color) = match &job.finished {
+        Some(Ok(())) if job.failed.is_empty() => ("done".to_string(), Color32::from_rgb(80, 180, 100)),
+        Some(Ok(())) => (format!("{} failed", job.failed.len()), Color32::from_rgb(220, 170, 60)),
+        _ => ("stopped".to_string(), Color32::from_rgb(220, 80, 80)),
+    };
+    let header = RichText::new(format!("{}  ·  {status}  ·  {:.0}s", job.title, job.elapsed)).color(color);
+    egui::CollapsingHeader::new(header).id_salt(("job", job.started)).default_open(newest).show(ui, |ui| {
+        if let Some(Err(e)) = &job.finished {
+            ui.colored_label(Color32::from_rgb(220, 80, 80), format!("Stopped: {e}"));
+        }
+        egui::Grid::new(("results", job.started)).striped(true).show(ui, |ui| {
+            for r in &job.results {
+                ui.label(&r.name);
+                ui.label(RichText::new(format!("{} frames", r.frames.len())).weak());
+                if ui.small_button("Open in Viewer").clicked() {
+                    view = Some(r.out_dir.clone());
+                }
+                ui.end_row();
+            }
+        });
+        for (ep, e) in &job.failed {
+            ui.colored_label(Color32::from_rgb(220, 80, 80), format!("{ep}: {e}"));
+        }
+        ui_log(ui, job, &format!("log{:?}", job.started), false);
+    });
+    view
+}
+
+fn ui_log(ui: &mut egui::Ui, job: &Job, id: &str, open: bool) {
+    egui::CollapsingHeader::new("Log").id_salt(id).default_open(open).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(id).max_height(260.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
+            for l in &job.log {
+                ui.label(RichText::new(l).monospace().small());
+            }
+        });
+    });
 }

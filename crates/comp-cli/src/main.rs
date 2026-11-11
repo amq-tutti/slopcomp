@@ -114,7 +114,8 @@ enum Cmd {
         /// number). Repeat for each source; the first one is the reference timeline.
         #[arg(short = 's', long = "source", required = true, num_args = 1, value_parser = parse_kv)]
         sources: Vec<(String, String)>,
-        /// Offset as LABEL=N (frames) or LABEL=Xs (seconds). Repeatable; frame and time offsets add up.
+        /// Offset as LABEL=N (frames) or LABEL=Xs (seconds); LABEL@E02=N for one episode of a
+        /// season run. Repeatable; frame and time offsets add up.
         /// Sources are aligned by timestamp first, so VFR and CFR sources line up; then the frame
         /// offset is applied ("DVD is 3 frames behind" → DVD=3).
         #[arg(long = "offset", value_parser = parse_kv)]
@@ -181,6 +182,9 @@ enum Cmd {
         /// Keep black borders (pillarbox/letterbox) instead of detecting and cropping them.
         #[arg(long)]
         no_crop: bool,
+        /// Only these episodes when sources are folders, e.g. --episodes 1,2,5 or E02,NCOP1.
+        #[arg(long, value_delimiter = ',')]
+        episodes: Vec<String>,
     },
 }
 
@@ -343,13 +347,27 @@ fn main() -> Result<()> {
                 select.exclude.push(parse_time_range(r)?);
             }
             let sources = p.sources.iter().map(|s| (s.label.clone(), s.path.to_string_lossy().into_owned())).collect();
-            let offsets = p
+            // Default offsets first, then per-episode ones (LABEL@EP), which start from the default.
+            let mut offsets: Vec<(String, String)> = p
                 .sources
                 .iter()
                 .flat_map(|s| {
                     s.offset.iter().flat_map(|o| o.split(',')).map(|o| (s.label.clone(), o.trim().to_string())).collect::<Vec<_>>()
                 })
                 .collect();
+            for s in &p.sources {
+                for (ep, o) in &s.episode_offsets {
+                    // Per-episode values are absolute: cancel the default, then add the episode's.
+                    for part in s.offset.iter().flat_map(|o| o.split(',')) {
+                        let part = part.trim();
+                        let neg = part.strip_prefix('-').map(|x| x.to_string()).unwrap_or_else(|| format!("-{part}"));
+                        offsets.push((format!("{}@{ep}", s.label), neg));
+                    }
+                    for part in o.split(',') {
+                        offsets.push((format!("{}@{ep}", s.label), part.trim().to_string()));
+                    }
+                }
+            }
             let field = |pick: fn(&comp_core::project::ProjectSource) -> &Option<String>| -> Vec<String> {
                 p.sources
                     .iter()
@@ -359,7 +377,7 @@ fn main() -> Result<()> {
             let ivtc = field(|s| &s.ivtc);
             let deint = field(|s| &s.deint);
             let matrices = p.sources.iter().filter_map(|s| s.matrix.clone().map(|m| (s.label.clone(), m))).collect();
-            run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, p.no_crop, select, false, false)?;
+            run_comp(sources, offsets, p.frames, p.seed, p.frame.clone(), ivtc, deint, matrices, p.name.clone(), p.out.clone(), p.no_sar, p.no_crop, select, false, false, vec![])?;
         }
         Cmd::Sync { sources, ivtc, deint, start, len, search } => {
             let paths: Vec<PathBuf> = sources.iter().map(|(_, p)| PathBuf::from(p)).collect();
@@ -453,6 +471,7 @@ fn main() -> Result<()> {
             out,
             no_sar,
             no_crop,
+            episodes,
         } => {
             let mut select = SelectOptions { exclude_chapter_op_ed: exclude_op_ed, ..Default::default() };
             if skip_duplicates {
@@ -504,7 +523,31 @@ fn main() -> Result<()> {
                                 })
                             };
                             let offs: Vec<&str> = offsets.iter().filter(|(ol, _)| ol == l).map(|(_, v)| v.as_str()).collect();
+                            // Per-episode offsets are stored absolute: the default plus LABEL@EP parts.
+                            let parse = |v: &str| -> (f64, i32) {
+                                match v.strip_suffix('s') {
+                                    Some(x) => (x.parse().unwrap_or(0.0), 0),
+                                    None => (0.0, v.parse().unwrap_or(0)),
+                                }
+                            };
+                            let base = offs.iter().map(|v| parse(v)).fold((0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+                            let mut eps: std::collections::BTreeMap<String, (f64, i32)> = Default::default();
+                            for (ol, v) in &offsets {
+                                if let Some((lab, ep)) = ol.split_once('@') {
+                                    if lab == l {
+                                        let e = eps.entry(pairing::normalize_episode(ep)).or_insert(base);
+                                        let d = parse(v);
+                                        e.0 += d.0;
+                                        e.1 += d.1;
+                                    }
+                                }
+                            }
+                            let episode_offsets = eps
+                                .into_iter()
+                                .map(|(e, (sec, f))| (e, if sec != 0.0 { format!("{sec}s,{f}") } else { f.to_string() }))
+                                .collect();
                             ProjectSource {
+                                episode_offsets,
                                 label: l.clone(),
                                 path: std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)),
                                 offset: (!offs.is_empty()).then(|| offs.join(",")),
@@ -518,7 +561,8 @@ fn main() -> Result<()> {
                 project.save(file)?;
                 eprintln!("saved project to {}", file.display());
             }
-            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar, no_crop, select, open, open_slowpics)?;
+            let only: Vec<String> = episodes.iter().map(|e| pairing::normalize_episode(e)).collect();
+            run_comp(sources, offsets, frames, seed, explicit, ivtc, deint, matrices, name, out, no_sar, no_crop, select, open, open_slowpics, only)?;
         }
     }
     Ok(())
@@ -541,6 +585,7 @@ fn run_comp(
     select: SelectOptions,
     open: bool,
     open_slowpics: bool,
+    only: Vec<String>,
 ) -> Result<()> {
     let mut specs: Vec<SourceSpec> = sources.iter().map(|(l, p)| SourceSpec::new(l, p)).collect();
     let find = |specs: &mut Vec<SourceSpec>, label: &str| -> Result<usize> {
@@ -550,11 +595,29 @@ fn run_comp(
             .with_context(|| format!("no source labelled '{label}'"))
     };
     for (label, v) in &offsets {
+        // LABEL@EP=N sets an offset for one episode of a season run.
+        let (label, ep) = match label.split_once('@') {
+            Some((l, e)) => (l, Some(pairing::normalize_episode(e))),
+            None => (label.as_str(), None),
+        };
         let i = find(&mut specs, label)?;
-        if let Some(secs) = v.strip_suffix('s') {
-            specs[i].offset_seconds += secs.parse::<f64>().with_context(|| format!("bad time offset '{v}'"))?;
+        let (mut secs, mut frames) = (0.0, 0);
+        if let Some(sv) = v.strip_suffix('s') {
+            secs = sv.parse::<f64>().with_context(|| format!("bad time offset '{v}'"))?;
         } else {
-            specs[i].offset_frames += v.parse::<i32>().with_context(|| format!("bad frame offset '{v}'"))?;
+            frames = v.parse::<i32>().with_context(|| format!("bad frame offset '{v}'"))?;
+        }
+        match ep {
+            Some(ep) => {
+                let base = (specs[i].offset_seconds, specs[i].offset_frames);
+                let e = specs[i].episode_offsets.entry(ep).or_insert(base);
+                e.0 += secs;
+                e.1 += frames;
+            }
+            None => {
+                specs[i].offset_seconds += secs;
+                specs[i].offset_frames += frames;
+            }
         }
     }
     for (list, mode) in [(&ivtc, FieldMode::Ivtc), (&deint, FieldMode::Deinterlace)] {
@@ -607,7 +670,7 @@ fn run_comp(
     let labels: Vec<String> = spec.sources.iter().map(|s| s.label.clone()).collect();
     let printer = Printer::new(labels.clone());
     let started = Instant::now();
-    let res = season::run(&spec, &|e| match e {
+    let res = season::run(&spec, (!only.is_empty()).then_some(only.as_slice()), &|e| match e {
         SeasonEvent::Paired(p) => {
             println!("{:<8} {}", "episode", labels.iter().map(|l| format!("{l:<10}")).collect::<String>());
             for row in &p.rows {

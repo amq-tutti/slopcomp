@@ -19,7 +19,7 @@ On Windows, build inside MSYS2 UCRT64 (see `.github/workflows/ci.yml`).
 cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → "target/release/Anime Comparisons.app"
 ```
 
-Drop files or episode folders onto the window, check alignment in **Sync** (offsets per source, flicker), then **Run**.
+Three steps: **1 Select** (drop files or episode folders onto the window, pick episodes and settings), **2 Sync** (line the sources up: offsets, flicker), **3 Create** (review the setup, create the comparison, follow progress and history). **Viewer** shows finished comparisons, including older ones, and is where you adjust frames and upload to slow.pics.
 **Viewer** shows any comparison (side by side, slider, flicker, synced zoom) and lets you fix odd frames by hand:
 move a source ±1 frame or to an exact frame, or replace the frame. The PNGs, `comp.json` and `index.html` update immediately. Setups save as TOML projects that the CLI can also run (`comp project file.toml`), and `anime-comp file.toml` opens one directly.
 
@@ -52,7 +52,7 @@ comp shot <file> <frame…> -o <dir>              # lossless PNGs of single fram
 comp pair -s BD=/bd/folder -s DVD=/dvd/folder   # check episode pairing (no decoding)
 comp sync -s BD=/bd/ep01.mkv -s DVD=/dvd/ep01.mkv   # suggest offsets (scene cuts), with confidence
 comp run  -s BD=/bd/ep01.mkv -s DVD=/dvd/ep01.mkv -n 20 --seed 1
-comp run  -s BD=/bd/folder -s DVD=/dvd/folder   # whole season, one comparison per episode
+comp run  -s BD=/bd/folder -s DVD=/dvd/folder   # whole season, one comparison per episode (--episodes 1,2,5 for some)
 comp project setup.toml                         # run a saved project (see --save-project)
 comp viewer comps/<name>                        # refresh index.html of existing comparisons (no decoding)
 comp fix "comps/<name>" --frame 12713 --source DVD --nudge -1   # re-shoot one source's frame

@@ -20,6 +20,9 @@ pub struct SourceSpec {
     pub offset_seconds: f64,
     /// Frame offset applied after the time mapping ("this source is N frames behind").
     pub offset_frames: i32,
+    /// Per-episode offsets (seconds, frames) for season runs, keyed by episode ("E02"); they
+    /// replace `offset_seconds`/`offset_frames` for that episode.
+    pub episode_offsets: std::collections::BTreeMap<String, (f64, i32)>,
     pub matrix_override: Option<i32>,
     pub full_range_override: Option<bool>,
     pub sar_override: Option<(i32, i32)>,
@@ -38,6 +41,7 @@ impl SourceSpec {
             path: path.into(),
             offset_seconds: 0.0,
             offset_frames: 0,
+            episode_offsets: Default::default(),
             matrix_override: None,
             full_range_override: None,
             sar_override: None,

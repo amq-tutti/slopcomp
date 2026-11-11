@@ -166,6 +166,8 @@ fn load_png(path: &Path, thumb: bool) -> Result<egui::ColorImage, String> {
 // ------------------------------------------------------------------------------------ viewer
 
 pub struct Viewer {
+    /// Comparison folders open in the viewer this session (oldest first); `dir` is one of them.
+    list: Vec<PathBuf>,
     dir: Option<PathBuf>,
     result: Option<CompResult>,
     frame: usize,
@@ -202,6 +204,7 @@ impl Viewer {
         let (edit_tx, edit_rx) = spawn_editor(move || c1.request_repaint());
         let (load_tx, load_rx) = spawn_loader(move || c2.request_repaint());
         Self {
+            list: Vec::new(),
             dir: None,
             result: None,
             frame: 0,
@@ -229,7 +232,33 @@ impl Viewer {
         }
     }
 
+    /// Adds a comparison to the list without showing it (e.g. when a job finishes).
+    pub fn add(&mut self, dir: &Path) {
+        if !self.list.iter().any(|d| d == dir) {
+            self.list.push(dir.to_owned());
+        }
+    }
+
+    /// Removes a comparison from the list; if it was showing, shows the newest remaining one.
+    fn close(&mut self, dir: &Path) {
+        self.list.retain(|d| d != dir);
+        if self.dir.as_deref() == Some(dir) {
+            self.dir = None;
+            self.result = None;
+            self.textures.clear();
+            self.pending.clear();
+            self.versions.clear();
+            self.frame_edits.clear();
+            self.message = None;
+            self.busy = false;
+            if let Some(next) = self.list.last().cloned() {
+                self.open(&next);
+            }
+        }
+    }
+
     pub fn open(&mut self, dir: &Path) {
+        self.add(dir);
         if self.dir.as_deref() == Some(dir) && self.result.is_some() {
             return;
         }
@@ -308,7 +337,7 @@ impl Viewer {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, recent: &[PathBuf]) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.pump(ctx);
 
         // Header: which comparison.
@@ -318,18 +347,37 @@ impl Viewer {
                     self.open(&d);
                 }
             }
-            if recent.len() > 1 {
-                let cur = self.dir.clone();
-                egui::ComboBox::from_id_salt("viewer_recent")
-                    .selected_text(cur.as_ref().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or("Recent…".into()))
+            let name_of = |d: &Path| d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let cur = self.dir.clone();
+            let mut open: Option<PathBuf> = None;
+            let mut close: Option<PathBuf> = None;
+            if self.list.len() > 1 || (self.list.len() == 1 && cur.is_none()) {
+                egui::ComboBox::from_id_salt("viewer_list")
+                    .selected_text(cur.as_deref().map(name_of).unwrap_or(format!("{} open…", self.list.len())))
                     .show_ui(ui, |ui| {
-                        for d in recent {
-                            let name = d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                            if ui.selectable_label(cur.as_deref() == Some(d.as_path()), name).clicked() {
-                                self.open(d);
-                            }
+                        for d in &self.list {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("×").on_hover_text("Close (files stay on disk)").clicked() {
+                                    close = Some(d.clone());
+                                }
+                                if ui.selectable_label(cur.as_deref() == Some(d.as_path()), name_of(d)).clicked() {
+                                    open = Some(d.clone());
+                                }
+                            });
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text("Comparisons open in the viewer");
+            }
+            if let Some(c) = &cur {
+                if ui.button("Close").on_hover_text("Close this comparison (files stay on disk)").clicked() {
+                    close = Some(c.clone());
+                }
+            }
+            if let Some(d) = close {
+                self.close(&d);
+            } else if let Some(d) = open {
+                self.open(&d);
             }
             if let Some(r) = &self.result {
                 ui.label(RichText::new(&r.name).strong());
@@ -344,7 +392,7 @@ impl Viewer {
         let Some(result) = self.result.clone() else {
             if !self.busy {
                 ui.add_space(20.0);
-                ui.label("Open a comparison folder, or run a comparison and press \"Open in viewer\".");
+                ui.label("Open a comparison folder, or create one in 3  Create and press \"Open in Viewer\".");
             }
             return;
         };
@@ -758,7 +806,7 @@ impl Viewer {
                 .clicked()
             {
                 crate::app::open_external(d);
-                crate::app::open_external(Path::new("https://slow.pics/comparison"));
+                crate::app::open_url("https://slow.pics/comparison");
             }
         }
     }
