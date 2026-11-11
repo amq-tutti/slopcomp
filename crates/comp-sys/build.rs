@@ -74,7 +74,10 @@ fn link(prefix: &PathBuf, target_os: &str) {
     match target_os {
         "macos" => println!("cargo:rustc-link-lib=c++"),
         "windows" => {
-            // mingw-w64: link libstdc++ statically so the binary has no extra DLL deps.
+            // mingw-w64: link libstdc++ statically so the binary has no extra DLL deps. Static libs
+            // must be found at build time, and rustc doesn't search MinGW's own folders.
+            search_compiler_dir_of("libstdc++.a", "CXX", "g++");
+            search_compiler_dir_of("libz.a", "CC", "gcc");
             println!("cargo:rustc-link-lib=static=stdc++");
             for l in ["bcrypt", "ole32", "user32"] {
                 println!("cargo:rustc-link-lib={l}");
@@ -84,17 +87,23 @@ fn link(prefix: &PathBuf, target_os: &str) {
             // COMP_STATIC_STDCXX=1 links libstdc++ statically (portable Linux release builds).
             if env::var("COMP_STATIC_STDCXX").is_ok_and(|v| v == "1") {
                 // libstdc++.a usually lives in the compiler's private lib dir (e.g. gcc-toolset).
-                let cxx = env::var("CXX").unwrap_or_else(|_| "c++".into());
-                if let Ok(out) = Command::new(&cxx).arg("-print-file-name=libstdc++.a").output() {
-                    let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-                    if p.is_absolute() && p.exists() {
-                        println!("cargo:rustc-link-search=native={}", p.parent().unwrap().display());
-                    }
-                }
+                search_compiler_dir_of("libstdc++.a", "CXX", "c++");
                 println!("cargo:rustc-link-lib=static=stdc++");
             } else {
                 println!("cargo:rustc-link-lib=stdc++");
             }
+        }
+    }
+}
+
+/// Adds the folder holding `file` (as the C/C++ compiler finds it) to the link search path.
+/// The compiler is taken from the `var` environment variable (CC/CXX), else `default`.
+fn search_compiler_dir_of(file: &str, var: &str, default: &str) {
+    let compiler = env::var(var).unwrap_or_else(|_| default.into());
+    if let Ok(out) = Command::new(&compiler).arg(format!("-print-file-name={file}")).output() {
+        let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        if p.is_absolute() && p.exists() {
+            println!("cargo:rustc-link-search=native={}", p.parent().unwrap().display());
         }
     }
 }
