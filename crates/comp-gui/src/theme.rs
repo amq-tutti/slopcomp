@@ -661,45 +661,67 @@ pub fn shortcuts_button(ui: &mut Ui, groups: &[ShortcutGroup]) {
         open = false;
     }
     if open {
+        // Opens below the button and never moves up over it. The whole list shows when the window
+        // is tall enough; otherwise it's limited to the space down to the window's bottom edge (less
+        // a margin) and scrolls.
+        const GAP: f32 = 8.0;
+        const BOTTOM_MARGIN: f32 = 12.0;
+        const FRAME_MARGIN: i8 = 14;
+        let top = rect.bottom() + GAP;
+        let room = ui.ctx().screen_rect().bottom() - top - BOTTOM_MARGIN;
         let area = egui::Area::new(egui::Id::new("shortcuts_list"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
-            .fixed_pos(rect.right_bottom() + Vec2::new(0.0, 8.0))
+            .fixed_pos(egui::pos2(rect.right(), top))
             .constrain(true)
             .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).inner_margin(Margin::same(14)).show(ui, |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(Margin::same(FRAME_MARGIN)).show(ui, |ui| {
                     ui.set_max_width(420.0);
                     ui.label(RichText::new("Keyboard shortcuts").size(15.0).color(TEXT_BRIGHT));
-                    for g in groups {
-                        ui.add_space(if g.sub { 6.0 } else { 12.0 });
-                        ui.horizontal(|ui| {
-                            section(ui, g.title);
-                            if g.current && !g.sub {
-                                pill(ui, "this screen", ACCENT);
-                            }
-                        });
-                        egui::Grid::new(("shortcuts", g.title)).num_columns(2).spacing([14.0, 6.0]).show(ui, |ui| {
-                            for (keys, what) in &g.rows {
-                                ui.horizontal(|ui| {
-                                    // Same key-column width in every group, so descriptions line up.
-                                    ui.set_min_width(118.0);
-                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                    for k in keys {
-                                        let plain = *k == "–" || k.chars().next().is_some_and(|c| c.is_lowercase());
-                                        if plain {
-                                            ui.label(RichText::new(*k).color(TEXT_WEAK));
-                                        } else {
-                                            keycap(ui, k);
+                    // Title plus the spacing egui adds before the next item.
+                    let title_h = ui.min_rect().height() + ui.spacing().item_spacing.y;
+                    let list_h = (room - title_h - 2.0 * FRAME_MARGIN as f32).max(80.0);
+                    // The usual hover-to-show scroll bar, but in a lane of its own beside the list
+                    // instead of over the text.
+                    let sc = &mut ui.spacing_mut().scroll;
+                    sc.floating_allocated_width = sc.bar_width + sc.bar_inner_margin;
+                    // min_scrolled_height: when the list has to scroll, take all the room. The area
+                    // only offers last frame's size, so without it the list would never grow.
+                    egui::ScrollArea::vertical()
+                        .max_height(list_h)
+                        .min_scrolled_height(list_h)
+                        .show(ui, |ui| {
+                        for g in groups {
+                            ui.add_space(if g.sub { 6.0 } else { 12.0 });
+                            ui.horizontal(|ui| {
+                                section(ui, g.title);
+                                if g.current && !g.sub {
+                                    pill(ui, "this screen", ACCENT);
+                                }
+                            });
+                            egui::Grid::new(("shortcuts", g.title)).num_columns(2).spacing([14.0, 6.0]).show(ui, |ui| {
+                                for (keys, what) in &g.rows {
+                                    ui.horizontal(|ui| {
+                                        // Same key-column width in every group, so descriptions line up.
+                                        ui.set_min_width(118.0);
+                                        ui.spacing_mut().item_spacing.x = 4.0;
+                                        for k in keys {
+                                            let plain = *k == "–" || k.chars().next().is_some_and(|c| c.is_lowercase());
+                                            if plain {
+                                                ui.label(RichText::new(*k).color(TEXT_WEAK));
+                                            } else {
+                                                keycap(ui, k);
+                                            }
                                         }
-                                    }
-                                });
-                                ui.label(RichText::new(*what).color(TEXT));
-                                ui.end_row();
-                            }
-                        });
-                    }
-                    ui.add_space(12.0);
-                    ui.label(RichText::new(crate::app::VERSION_LABEL).small().color(TEXT_WEAK));
+                                    });
+                                    ui.label(RichText::new(*what).color(TEXT));
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                        ui.add_space(12.0);
+                        ui.label(RichText::new(crate::app::VERSION_LABEL).small().color(TEXT_WEAK));
+                    });
                 });
             });
         // Close on a click outside the list and the button.
