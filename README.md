@@ -32,7 +32,17 @@ packaging/windows/package.sh         # Windows (MSYS2 UCRT64): zip, fails on non
 packaging/notices.sh                 # regenerate THIRD_PARTY_NOTICES.md
 ```
 
-Pushing a `v*` tag runs `.github/workflows/release.yml` (all three platforms → draft GitHub release with SHA256SUMS). macOS builds are ad-hoc signed unless the Developer ID secrets listed in the workflow are set.
+## Releasing
+
+Note each user-visible change under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) as you go. To release:
+
+```bash
+packaging/release.sh 0.2.0
+```
+
+It moves the Unreleased notes under the new version, sets the version in `Cargo.toml`, shows the notes and asks before it commits, tags `v0.2.0` and pushes. The tag runs `.github/workflows/release.yml`: all three platforms are built and a **draft** GitHub release is created with the changelog notes, the downloads and SHA256SUMS. Check it on the repo's Releases page and publish it. Versions with a suffix (`0.2.0-beta.1`) are marked as pre-releases.
+
+The workflow can also be started from the Actions tab without a tag, to test the builds; that run doesn't create a release. macOS builds are ad-hoc signed unless the Developer ID secrets listed in the workflow are set.
 
 ## Testing
 
