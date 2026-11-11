@@ -1,60 +1,99 @@
+<div align="center">
+
+<img src="docs/images/icon.png" width="128" height="128" alt="SlopComp icon">
+
 # SlopComp
 
-Frame-exact anime source comparisons (WEB-DL vs BD vs encodes vs DVD), with lossless PNG screenshots and slow.pics upload.
-Native Rust app with statically linked ffmpeg/ffms2/zimg. See [PLAN.md](PLAN.md) for the architecture and roadmap.
+**Frame-exact anime source comparisons, without the scripting.**
 
-## Building
+Line up WEB-DLs, Blu-rays, fansub encodes and DVDs, pick frames automatically,
+and get lossless PNG screenshots ready for slow.pics.
 
-```bash
-deps/build.sh                 # static dav1d, ffmpeg, zimg, ffms2 -> deps/prefix (one-off, ~5 min)
-cargo build --release         # builds target/release/comp
-```
+[![Latest release](https://img.shields.io/github/v/release/amq-tutti/anime-comp?label=download&color=8b5cf6)](https://github.com/amq-tutti/anime-comp/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-ec4899)](LICENSE)
+![macOS · Linux · Windows](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-334155)
+[![CI](https://github.com/amq-tutti/anime-comp/actions/workflows/ci.yml/badge.svg)](https://github.com/amq-tutti/anime-comp/actions/workflows/ci.yml)
 
-Requirements: Rust, a C/C++ toolchain, autoconf/automake/libtool, meson, ninja, pkg-config, nasm (x86 only), libclang.
-On Windows, build inside MSYS2 UCRT64 (see `.github/workflows/ci.yml`).
+[**Download**](#download) · [Features](#features) · [How it works](#how-it-works) · [Command line](#command-line) · [Building](#building-from-source)
 
-## Desktop app
+<img src="docs/images/viewer.png" alt="SlopComp's viewer showing the same frame from a BD remux, a BD encode and a DVD encode side by side">
 
-```bash
-cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → "target/release/SlopComp.app"
-```
+</div>
 
-Three steps: **1 Select** (drop files or episode folders onto the window, pick episodes and settings), **2 Sync** (line the sources up: offsets, flicker), **3 Create** (review the setup, create the comparison, follow progress and history). **Viewer** shows finished comparisons, including older ones, and is where you adjust frames and upload to slow.pics.
-**Viewer** shows any comparison (side by side, slider, flicker, synced zoom) and lets you fix odd frames by hand:
-move a source ±1 frame or to an exact frame, or replace the frame. The PNGs, `comp.json` and `index.html` update immediately. Setups save as TOML projects that the CLI can also run (`comp project file.toml`), and `anime-comp file.toml` opens one directly.
+## Features
 
-## Packaging
+- **Frame-exact decoding.** Seeking is tested against an independent ffmpeg decode, frame by
+  frame, read straight through and in random order, so the frame you ask for is the frame you get.
+- **Mixed releases line up.** Sources are aligned by timestamp, so VFR encodes and CFR DVDs match.
+  Offsets can be set per source and per episode.
+- **Automatic offset suggestions.** Scene cuts are matched between sources, with a confidence
+  rating that flags a wrong match.
+- **IVTC and deinterlacing** for 1080i BD remuxes and telecined NTSC DVDs.
+- **Smart frame picking.** Black screens and scene changes are skipped. Optional rules skip
+  near-duplicates, flat or dark frames, or keep only B-frames from an encode.
+- **Whole seasons at once.** Drop in episode folders: episodes are paired by their numbers,
+  OP/ED chapters can be left out, and you get one comparison per episode.
+- **Black borders cropped** per source, and anamorphic DVDs stretched to their display size.
+- **Built-in viewer** with side by side, slider and flicker modes, synced zoom and pan, and
+  frame-by-frame fixes when a shot isn't right.
+- **Shareable output.** Lossless PNGs named for slow.pics batch upload, plus an offline
+  `index.html` viewer next to every comparison.
+- **Command-line tool** (`comp`) for scripting, with the same projects as the app.
 
-```bash
-packaging/macos/bundle.sh --dmg      # macOS: "target/release/SlopComp.app" + .dmg
-packaging/linux/docker-build.sh      # Linux AppImage + CLI tarball in manylinux_2_28 (Docker) → target/linux/
-packaging/windows/package.sh         # Windows (MSYS2 UCRT64): zip, fails on non-system DLL imports
-packaging/notices.sh                 # regenerate THIRD_PARTY_NOTICES.md
-```
+## Download
 
-## Releasing
+Get the latest version from the [**Releases page**](https://github.com/amq-tutti/anime-comp/releases/latest).
 
-Note each user-visible change under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) as you go. To release:
+| Platform | File | Notes |
+| --- | --- | --- |
+| **macOS** (Apple Silicon, 11+) | `SlopComp-<version>-macos-arm64.dmg` | Not notarized: the first time, right-click the app and choose **Open**. |
+| **Linux** (x64, glibc 2.28+) | `SlopComp-<version>-linux-x86_64.AppImage` | `chmod +x` it and run. The `comp` tool alone is in the `.tar.gz`. |
+| **Windows** (x64) | `SlopComp-<version>-windows-x64.zip` | Unzip and run `anime-comp.exe`. |
 
-```bash
-packaging/release.sh 0.2.0
-```
+Everything is statically linked (ffmpeg, ffms2, zimg, dav1d), so there's nothing else to install.
+`SHA256SUMS.txt` on each release lists the checksums.
 
-It moves the Unreleased notes under the new version, sets the version in `Cargo.toml`, shows the notes and asks before it commits, tags `v0.2.0` and pushes. The tag runs `.github/workflows/release.yml`: all three platforms are built and a **draft** GitHub release is created with the changelog notes, the downloads and SHA256SUMS. Check it on the repo's Releases page and publish it. Versions with a suffix (`0.2.0-beta.1`) are marked as pre-releases.
+## How it works
 
-The workflow can also be started from the Actions tab without a tag, to test the builds; that run doesn't create a release. macOS builds are ad-hoc signed unless the Developer ID secrets listed in the workflow are set.
+The app walks you through three steps, then opens the result in the viewer.
 
-## Testing
+### 1 · Select
 
-```bash
-testdata/make_corpus.sh       # synthetic clips (needs system ffmpeg with x264/x265/svt-av1/vpx)
-cargo test --release
-```
+Drop video files or whole episode folders onto the window. The first source is the reference;
+set field handling (progressive, IVTC, deinterlace) and colour matrix per source, pick episodes,
+and choose how many frames to take.
 
-The seek-accuracy test checks every frame of every clip, read straight through and in random
-order, against the MD5s from an independent system ffmpeg decode.
+<img src="docs/images/select.png" alt="Select step with three sources and episode pairing">
 
-## CLI
+### 2 · Sync
+
+Check that the sources line up with live previews, flick between them, and apply the suggested
+offsets (or set your own, per episode if a release differs).
+
+<img src="docs/images/sync.png" alt="Sync step with suggested offsets and side-by-side previews">
+
+### 3 · Create
+
+Review the setup and start. Progress is shown per source and per episode, with a log and a
+history of finished jobs.
+
+<img src="docs/images/create.png" alt="Create step with the summary and a comparison in progress">
+
+### Viewer
+
+Look through the result in side by side, slider or flicker mode, zoom in on details, and fix
+any shot: move a source a frame either way, jump to an exact frame, or swap the frame for
+another. The PNGs, `comp.json` and `index.html` update immediately. From here you can also open
+the output folder or slow.pics for upload.
+
+Setups can be saved as TOML projects, which the command-line tool can run too
+(`comp project file.toml`), and `anime-comp file.toml` opens one in the app.
+
+<sub>Screenshots show *To Heart* (© AQUAPLUS / KSS) for illustration.</sub>
+
+## Command line
+
+The `comp` tool ships next to the app (and on its own in the Linux `.tar.gz`).
 
 ```bash
 comp info <files…>
@@ -80,3 +119,52 @@ Useful `run` options:
 - Black borders (pillarbox/letterbox) are detected per source and cropped from every shot; `--no-crop` keeps them.
 - `--open`: open the offline viewer (`index.html`, written next to the PNGs) when done.
 - `--open-slowpics`: open the output folder and slow.pics' upload page for a manual drag-and-drop upload. Automated uploads need slow.pics staff permission, so the tool doesn't upload itself.
+
+## Building from source
+
+```bash
+deps/build.sh                 # static dav1d, ffmpeg, zimg, ffms2 -> deps/prefix (one-off, ~5 min)
+cargo build --release         # builds target/release/comp
+```
+
+Requirements: Rust, a C/C++ toolchain, autoconf/automake/libtool, meson, ninja, pkg-config, nasm (x86 only), libclang.
+On Windows, build inside MSYS2 UCRT64 (see `.github/workflows/ci.yml`).
+
+Run the app with `cargo run --release -p comp-gui`. See [PLAN.md](PLAN.md) for the architecture and roadmap.
+
+### Testing
+
+```bash
+testdata/make_corpus.sh       # synthetic clips (needs system ffmpeg with x264/x265/svt-av1/vpx)
+cargo test --release
+```
+
+The seek-accuracy test checks every frame of every clip, read straight through and in random
+order, against the MD5s from an independent system ffmpeg decode.
+
+### Packaging
+
+```bash
+packaging/macos/bundle.sh --dmg      # macOS: "target/release/SlopComp.app" + .dmg
+packaging/linux/docker-build.sh      # Linux AppImage + CLI tarball in manylinux_2_28 (Docker) → target/linux/
+packaging/windows/package.sh         # Windows (MSYS2 UCRT64): zip, fails on non-system DLL imports
+packaging/notices.sh                 # regenerate THIRD_PARTY_NOTICES.md
+```
+
+### Releasing
+
+Note each user-visible change under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) as you go. To release:
+
+```bash
+packaging/release.sh 0.2.0
+```
+
+It moves the Unreleased notes under the new version, sets the version in `Cargo.toml`, shows the notes and asks before it commits, tags `v0.2.0` and pushes. The tag runs `.github/workflows/release.yml`: all three platforms are built and a **draft** GitHub release is created with the changelog notes, the downloads and SHA256SUMS. Check it on the repo's Releases page and publish it. Versions with a suffix (`0.2.0-beta.1`) are marked as pre-releases.
+
+The workflow can also be started from the Actions tab without a tag, to test the builds; that run doesn't create a release. macOS builds are ad-hoc signed unless the Developer ID secrets listed in the workflow are set.
+
+## License
+
+SlopComp is free software under the [GNU GPL v3.0 or later](LICENSE). It bundles ffmpeg, ffms2,
+zimg, dav1d and other libraries; their licences are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
