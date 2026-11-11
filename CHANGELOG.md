@@ -23,6 +23,14 @@ its notes.
   as ±2 frames) when the frames either side of the right offset looked alike, which happened most
   with telecined (IVTC) sources. The final frame is now chosen by matching frame-to-frame motion,
   which only lines up at the exact offset.
+- The keyboard shortcuts list no longer covers the "?" button in short windows. It shows in full
+  when the window is tall enough, and otherwise scrolls, with its scroll bar beside the text
+  instead of over it.
+
+### Changed
+
+- Auto in Sync takes a little longer (about twice as much video is decoded) because of the drift
+  check.
 
 ## [0.1.0] - 2026-11-11
 
