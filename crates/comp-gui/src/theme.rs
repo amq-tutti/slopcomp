@@ -698,6 +698,8 @@ pub fn shortcuts_button(ui: &mut Ui, groups: &[ShortcutGroup]) {
                             }
                         });
                     }
+                    ui.add_space(12.0);
+                    ui.label(RichText::new(crate::app::VERSION_LABEL).small().color(TEXT_WEAK));
                 });
             });
         // Close on a click outside the list and the button.

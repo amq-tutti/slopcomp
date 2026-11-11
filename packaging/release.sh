@@ -29,8 +29,10 @@ git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already e
 
 CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 [[ -n "$CURRENT" ]] || die "couldn't read the version from Cargo.toml"
-LOWEST=$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | head -1)
-[[ "$LOWEST" == "$CURRENT" ]] || die "$VERSION is lower than the current version $CURRENT"
+# Compare against the current version without its -dev (or other) suffix: 0.1.1-dev -> 0.1.1 is fine.
+CURRENT_BASE=${CURRENT%%-*}
+LOWEST=$(printf '%s\n%s\n' "$CURRENT_BASE" "$VERSION" | sort -V | head -1)
+[[ "$LOWEST" == "$CURRENT_BASE" ]] || die "$VERSION is lower than the current version $CURRENT"
 
 PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | head -1)
 if [[ -n "$PREV_TAG" ]]; then
@@ -87,9 +89,26 @@ fi
 git add CHANGELOG.md Cargo.toml Cargo.lock
 git commit --quiet -m "Release $TAG"
 git tag -a "$TAG" -m "SlopComp $VERSION"
+
+# Start the next development version right away, so local builds don't pass for the release:
+# 0.2.0 -> 0.2.1-dev; a pre-release like 0.2.0-beta.1 -> 0.2.0-dev.
+BASE=${VERSION%%-*}
+if [[ "$VERSION" == *-* ]]; then
+  NEXT="$BASE-dev"
+else
+  NEXT="${BASE%.*}.$(( ${BASE##*.} + 1 ))-dev"
+fi
+awk -v v="$NEXT" '!done && /^version = "/ { print "version = \"" v "\""; done = 1; next } { print }' \
+  Cargo.toml > Cargo.toml.new
+mv Cargo.toml.new Cargo.toml
+cargo update --workspace --offline --quiet
+git add Cargo.toml Cargo.lock
+# [skip ci]: only the version changed; the tag's release run builds everything.
+git commit --quiet -m "Start $NEXT development" -m "[skip ci]"
+
 git push --atomic origin master "$TAG"
 
 echo
-echo "Pushed $TAG. The builds take a while; the draft release appears when all three finish:"
+echo "Pushed $TAG (master is now at $NEXT). The builds take a while; the draft release appears when all three finish:"
 echo "  $REPO_URL/actions"
 echo "  $REPO_URL/releases"

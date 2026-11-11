@@ -458,6 +458,9 @@ fn fps_text(num: i32, den: i32) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// "SlopComp <version>", shown on hover over the logo and name and under the shortcuts list.
+pub const VERSION_LABEL: &str = concat!("SlopComp ", env!("CARGO_PKG_VERSION"));
+
 /// Keyboard shortcuts by screen and view mode, for the "?" list in the top bar. The current screen's
 /// groups come first. One action per line.
 fn shortcut_groups(tab: Tab) -> Vec<theme::ShortcutGroup> {
@@ -554,10 +557,9 @@ impl eframe::App for App {
                 let menu = avail < prev_tabs + prev_buttons + 24.0;
                 let start_x = ui.cursor().min.x;
                 let logo = theme::logo(ui);
+                logo.on_hover_text(VERSION_LABEL);
                 if show_title {
-                    ui.label(RichText::new("SlopComp").font(title_font).color(theme::TEXT_BRIGHT));
-                } else {
-                    logo.on_hover_text("SlopComp");
+                    ui.label(RichText::new("SlopComp").font(title_font).color(theme::TEXT_BRIGHT)).on_hover_text(VERSION_LABEL);
                 }
                 ui.add_space(if show_title { 18.0 } else { 8.0 });
                 let running = self.running();
