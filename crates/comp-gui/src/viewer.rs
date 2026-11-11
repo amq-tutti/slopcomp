@@ -603,9 +603,9 @@ impl Viewer {
                         painter.rect_filled(pill, 4.0, Color32::from_black_alpha(180));
                         painter.galley(pill.min + pad, galley, Color32::WHITE);
                         if k == self.frame {
-                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(2.0_f32, theme::ACCENT), egui::StrokeKind::Inside);
                         } else if resp.hovered() {
-                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, theme::TEXT_WEAK), egui::StrokeKind::Inside);
+                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0_f32, theme::TEXT_WEAK), egui::StrokeKind::Inside);
                         }
                         if resp.clicked() {
                             self.frame = k;
@@ -755,7 +755,7 @@ impl Viewer {
                         painter.with_clip_rect(clip).image(tex.id(), img_rect, uv(), Color32::WHITE);
                     }
                 }
-                painter.line_segment([Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)], egui::Stroke::new(2.0, Color32::WHITE));
+                painter.line_segment([Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)], egui::Stroke::new(2.0_f32, Color32::WHITE));
                 label(painter, rect, shot_label(self.left), false);
                 label(painter, rect, shot_label(self.right), true);
             }

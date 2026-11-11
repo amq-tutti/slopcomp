@@ -62,7 +62,7 @@ pub fn apply(ctx: &egui::Context) {
         v.dark_mode = true;
         v.panel_fill = BG;
         v.window_fill = SURFACE_2;
-        v.window_stroke = Stroke::new(1.0, BORDER);
+        v.window_stroke = Stroke::new(1.0_f32, BORDER);
         v.window_corner_radius = CornerRadius::same(10);
         v.menu_corner_radius = CornerRadius::same(10);
         let shadow = Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(140) };
@@ -75,7 +75,7 @@ pub fn apply(ctx: &egui::Context) {
         v.warn_fg_color = WARN;
         v.error_fg_color = ERR;
         v.selection.bg_fill = ACCENT_SOFT;
-        v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(0xe6, 0xe1, 0xff));
+        v.selection.stroke = Stroke::new(1.0_f32, Color32::from_rgb(0xe6, 0xe1, 0xff));
         v.indent_has_left_vline = false;
         v.interact_cursor = Some(egui::CursorIcon::PointingHand);
         // Sliders: the travelled part of the rail in the accent colour.
@@ -86,14 +86,14 @@ pub fn apply(ctx: &egui::Context) {
             weak_bg_fill: fill,
             bg_stroke: stroke,
             corner_radius: CornerRadius::same(r),
-            fg_stroke: Stroke::new(1.0, fg),
+            fg_stroke: Stroke::new(1.0_f32, fg),
             expansion: 0.0,
         };
-        v.widgets.noninteractive = w(SURFACE, Stroke::new(1.0, BORDER), TEXT, 8);
-        v.widgets.inactive = w(SURFACE_2, Stroke::new(1.0, Color32::from_rgb(0x33, 0x36, 0x42)), TEXT, 7);
-        v.widgets.hovered = w(SURFACE_3, Stroke::new(1.0, ACCENT.gamma_multiply(0.55)), TEXT_BRIGHT, 7);
-        v.widgets.active = w(ACCENT_SOFT, Stroke::new(1.0, ACCENT), TEXT_BRIGHT, 7);
-        v.widgets.open = w(SURFACE_3, Stroke::new(1.0, BORDER), TEXT_BRIGHT, 7);
+        v.widgets.noninteractive = w(SURFACE, Stroke::new(1.0_f32, BORDER), TEXT, 8);
+        v.widgets.inactive = w(SURFACE_2, Stroke::new(1.0_f32, Color32::from_rgb(0x33, 0x36, 0x42)), TEXT, 7);
+        v.widgets.hovered = w(SURFACE_3, Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.55)), TEXT_BRIGHT, 7);
+        v.widgets.active = w(ACCENT_SOFT, Stroke::new(1.0_f32, ACCENT), TEXT_BRIGHT, 7);
+        v.widgets.open = w(SURFACE_3, Stroke::new(1.0_f32, BORDER), TEXT_BRIGHT, 7);
     });
 }
 
@@ -101,12 +101,12 @@ pub fn apply(ctx: &egui::Context) {
 
 /// A rounded card for a section of a page.
 pub fn card() -> egui::Frame {
-    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, BORDER)).corner_radius(10).inner_margin(Margin::same(14))
+    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0_f32, BORDER)).corner_radius(10).inner_margin(Margin::same(14))
 }
 
 /// A smaller card, for items inside a page (a source, a history entry).
 pub fn tile() -> egui::Frame {
-    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, BORDER)).corner_radius(8).inner_margin(Margin::symmetric(12, 10))
+    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0_f32, BORDER)).corner_radius(8).inner_margin(Margin::symmetric(12, 10))
 }
 
 /// Small, spaced, upper-case label above a section.
@@ -139,7 +139,7 @@ impl egui::Widget for Primary {
             }
             let p = ui.painter();
             p.rect_filled(rect, 8.0, fill);
-            p.rect_stroke(rect, 8.0, Stroke::new(1.0, mix(ACCENT, Color32::WHITE, 0.2 * hover)), egui::StrokeKind::Inside);
+            p.rect_stroke(rect, 8.0, Stroke::new(1.0_f32, mix(ACCENT, Color32::WHITE, 0.2 * hover)), egui::StrokeKind::Inside);
             p.galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
         }
         resp
@@ -249,7 +249,7 @@ pub fn progress(ui: &mut Ui, id_salt: impl std::hash::Hash, fraction: f32, label
     painter.text(rect.right_top(), egui::Align2::RIGHT_TOP, pct, font, mix(TEXT_WEAK, OK, done));
     let track = Rect::from_min_size(Pos2::new(rect.left(), rect.bottom() - 6.0), Vec2::new(width, 6.0));
     painter.rect_filled(track, 3.0, INSET);
-    painter.rect_stroke(track, 3.0, Stroke::new(1.0, BORDER), egui::StrokeKind::Inside);
+    painter.rect_stroke(track, 3.0, Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
     if shown > 0.0 {
         let fill = Rect::from_min_size(track.min, Vec2::new((width * shown).max(6.0), 6.0));
         let green = OK.gamma_multiply(0.8);
@@ -312,7 +312,7 @@ pub fn logo(ui: &mut Ui) -> Response {
     let b = a.translate(Vec2::new(9.0, 0.0));
     p.rect_filled(a, 4.0, ACCENT);
     p.rect_filled(b, 4.0, ACCENT_2.gamma_multiply(0.85));
-    p.rect_stroke(b, 4.0, Stroke::new(1.5, BAR), egui::StrokeKind::Outside);
+    p.rect_stroke(b, 4.0, Stroke::new(1.5_f32, BAR), egui::StrokeKind::Outside);
     resp
 }
 
@@ -334,7 +334,7 @@ pub fn step_tab(ui: &mut Ui, number: Option<u8>, label: &str, selected: bool, en
     let p = ui.painter();
     if selected {
         p.rect_filled(rect, 8.0, SURFACE_2);
-        p.rect_stroke(rect, 8.0, Stroke::new(1.0, BORDER), egui::StrokeKind::Inside);
+        p.rect_stroke(rect, 8.0, Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
     } else if hovered {
         p.rect_filled(rect, 8.0, SURFACE);
     }
@@ -344,7 +344,7 @@ pub fn step_tab(ui: &mut Ui, number: Option<u8>, label: &str, selected: bool, en
         if selected {
             p.circle_filled(c, circle / 2.0, ACCENT);
         } else {
-            p.circle_stroke(c, circle / 2.0 - 0.5, Stroke::new(1.0, TEXT_WEAK.gamma_multiply(dim)));
+            p.circle_stroke(c, circle / 2.0 - 0.5, Stroke::new(1.0_f32, TEXT_WEAK.gamma_multiply(dim)));
         }
         let col = if selected { Color32::WHITE } else { TEXT_WEAK.gamma_multiply(dim) };
         p.text(c, egui::Align2::CENTER_CENTER, n.to_string(), FontId::proportional(11.5), col);
@@ -355,7 +355,7 @@ pub fn step_tab(ui: &mut Ui, number: Option<u8>, label: &str, selected: bool, en
     if selected {
         // Accent underline on the bar's bottom border, like a tab indicator.
         let y = rect.bottom() + BAR_PAD_Y - 1.0;
-        p.line_segment([Pos2::new(rect.left() + 10.0, y), Pos2::new(rect.right() - 10.0, y)], Stroke::new(2.0, ACCENT));
+        p.line_segment([Pos2::new(rect.left() + 10.0, y), Pos2::new(rect.right() - 10.0, y)], Stroke::new(2.0_f32, ACCENT));
     }
     resp
 }
@@ -363,7 +363,7 @@ pub fn step_tab(ui: &mut Ui, number: Option<u8>, label: &str, selected: bool, en
 /// Thin connector between step tabs.
 pub fn step_link(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(14.0, 32.0), Sense::hover());
-    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, BORDER));
+    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0_f32, BORDER));
 }
 
 /// Small coloured status pill ("done", "stopped").
@@ -384,13 +384,13 @@ pub fn path_label(ui: &mut Ui, path: &str, color: Color32) -> Response {
 
 /// A full-width strip of controls at the top of a page.
 pub fn toolbar() -> egui::Frame {
-    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, BORDER)).corner_radius(10).inner_margin(Margin::symmetric(10, 8))
+    egui::Frame::new().fill(SURFACE).stroke(Stroke::new(1.0_f32, BORDER)).corner_radius(10).inner_margin(Margin::symmetric(10, 8))
 }
 
 /// Short vertical divider between groups of controls in a row.
 pub fn vsep(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 20.0), Sense::hover());
-    ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, BORDER));
+    ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0_f32, BORDER));
 }
 
 /// Segmented control: one inset strip with an option per segment, the chosen one raised.
@@ -407,7 +407,7 @@ pub fn segmented(ui: &mut Ui, id_salt: impl std::hash::Hash, options: &[(&str, &
     let (outer, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
     let p = ui.painter().clone();
     p.rect_filled(outer, 8.0, INSET);
-    p.rect_stroke(outer, 8.0, Stroke::new(1.0, BORDER), egui::StrokeKind::Inside);
+    p.rect_stroke(outer, 8.0, Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
     let mut x = outer.left() + 2.0;
     let mut clicked = None;
     for (i, (g, (_, hover, keys))) in galleys.into_iter().zip(options).enumerate() {
@@ -416,7 +416,7 @@ pub fn segmented(ui: &mut Ui, id_salt: impl std::hash::Hash, options: &[(&str, &
         let resp = key_hint(ui.interact(seg, base.with(i), Sense::click()), hover, keys).on_hover_cursor(egui::CursorIcon::PointingHand);
         let col = if i == selected {
             p.rect_filled(seg, 6.0, SURFACE_3);
-            p.rect_stroke(seg, 6.0, Stroke::new(1.0, ACCENT.gamma_multiply(0.6)), egui::StrokeKind::Inside);
+            p.rect_stroke(seg, 6.0, Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.6)), egui::StrokeKind::Inside);
             TEXT_BRIGHT
         } else if resp.hovered() {
             p.rect_filled(seg, 6.0, SURFACE);
@@ -460,7 +460,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, enabled: bool) -> Response {
         (true, true, false) => TEXT_BRIGHT,
         _ => TEXT_WEAK,
     };
-    let stroke = Stroke::new(1.6, col);
+    let stroke = Stroke::new(1.6_f32, col);
     let c = rect.center();
     match icon {
         Icon::Up | Icon::Down => {
@@ -502,14 +502,14 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, text: &str) -> Response {
         let rest_border = Color32::from_rgb(0x4a, 0x4f, 0x5e);
         p.rect_filled(b, 4.0, mix(INSET, ACCENT, t));
         let border = if hovered { ACCENT } else { mix(rest_border, ACCENT, t) };
-        p.rect_stroke(b, 4.0, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+        p.rect_stroke(b, 4.0, Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
         if t > 0.0 {
             // Tick drawn from its short stroke to its long one, so it "writes" itself as it appears.
             let a = b.center() + Vec2::new(-3.8, 0.2);
             let m = b.center() + Vec2::new(-1.2, 2.8);
             let z = b.center() + Vec2::new(4.0, -2.8);
             let col = Color32::WHITE.gamma_multiply(t);
-            let stroke = Stroke::new(1.8, col);
+            let stroke = Stroke::new(1.8_f32, col);
             let first = (t * 2.0).min(1.0);
             p.line_segment([a, a + (m - a) * first], stroke);
             if t > 0.5 {
@@ -531,7 +531,7 @@ pub fn chevron(ui: &mut Ui, openness: f32, response: &Response) {
     let col = if response.hovered() { TEXT_BRIGHT } else { TEXT_WEAK };
     let rot = egui::emath::Rot2::from_angle(openness * std::f32::consts::FRAC_PI_2);
     let pts = [Vec2::new(-1.8, -4.0), Vec2::new(2.2, 0.0), Vec2::new(-1.8, 4.0)].map(|v| c + rot * v);
-    let stroke = Stroke::new(1.6, col);
+    let stroke = Stroke::new(1.6_f32, col);
     ui.painter().line_segment([pts[0], pts[1]], stroke);
     ui.painter().line_segment([pts[1], pts[2]], stroke);
 }
@@ -566,7 +566,7 @@ pub fn disclosure<R>(
 
 /// An inset panel for machine output (logs): darker than the card, monospace.
 pub fn code_panel() -> egui::Frame {
-    egui::Frame::new().fill(INSET).stroke(Stroke::new(1.0, BORDER)).corner_radius(6).inner_margin(Margin::symmetric(10, 8))
+    egui::Frame::new().fill(INSET).stroke(Stroke::new(1.0_f32, BORDER)).corner_radius(6).inner_margin(Margin::symmetric(10, 8))
 }
 
 // ---------------------------------------------------------------- keyboard hints
@@ -575,7 +575,7 @@ pub fn code_panel() -> egui::Frame {
 fn keyboard_icon(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(17.0, 12.0), Sense::hover());
     let p = ui.painter();
-    p.rect_stroke(rect, 2.5, Stroke::new(1.1, TEXT_WEAK), egui::StrokeKind::Inside);
+    p.rect_stroke(rect, 2.5, Stroke::new(1.1_f32, TEXT_WEAK), egui::StrokeKind::Inside);
     for row in 0..2 {
         for k in 0..4 {
             let c = Pos2::new(rect.left() + 3.6 + k as f32 * 3.3, rect.top() + 3.4 + row as f32 * 2.6);
@@ -583,7 +583,7 @@ fn keyboard_icon(ui: &mut Ui) {
         }
     }
     let y = rect.bottom() - 2.8;
-    p.line_segment([Pos2::new(rect.left() + 5.0, y), Pos2::new(rect.right() - 5.0, y)], Stroke::new(1.3, TEXT_WEAK));
+    p.line_segment([Pos2::new(rect.left() + 5.0, y), Pos2::new(rect.right() - 5.0, y)], Stroke::new(1.3_f32, TEXT_WEAK));
 }
 
 /// One key drawn as a keycap.
@@ -593,7 +593,7 @@ pub fn keycap(ui: &mut Ui, key: &str) {
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 4.0, SURFACE_3);
-    p.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(0x45, 0x49, 0x57)), egui::StrokeKind::Inside);
+    p.rect_stroke(rect, 4.0, Stroke::new(1.0_f32, Color32::from_rgb(0x45, 0x49, 0x57)), egui::StrokeKind::Inside);
     p.galley(rect.center() - galley.size() / 2.0, galley, TEXT_BRIGHT);
 }
 
@@ -648,7 +648,7 @@ pub fn shortcuts_button(ui: &mut Ui, groups: &[ShortcutGroup]) {
         if open || hovered {
             p.circle_filled(c, 13.0, SURFACE_3);
         }
-        p.circle_stroke(c, 12.5, Stroke::new(1.0, if open { ACCENT } else { Color32::from_rgb(0x45, 0x49, 0x57) }));
+        p.circle_stroke(c, 12.5, Stroke::new(1.0_f32, if open { ACCENT } else { Color32::from_rgb(0x45, 0x49, 0x57) }));
         let col = if open || hovered { TEXT_BRIGHT } else { TEXT };
         p.text(c, egui::Align2::CENTER_CENTER, "?", FontId::proportional(14.0), col);
     }

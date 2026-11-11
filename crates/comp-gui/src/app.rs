@@ -540,7 +540,7 @@ impl eframe::App for App {
         let bar = egui::Frame::new()
             .fill(theme::BAR)
             .inner_margin(egui::Margin::symmetric(16, theme::BAR_PAD_Y as i8))
-            .stroke(egui::Stroke::new(1.0, theme::BORDER));
+            .stroke(egui::Stroke::new(1.0_f32, theme::BORDER));
         egui::TopBottomPanel::top("top").frame(bar).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // Full row height before anything is placed, so the logo and name centre on the same
@@ -765,7 +765,7 @@ impl App {
                                     let y = ui.cursor().top();
                                     let x = ui.min_rect().left();
                                     let col = if strong { theme::BORDER } else { theme::BORDER.gamma_multiply(0.5) };
-                                    ui.painter().line_segment([egui::pos2(x, y), egui::pos2(x + full_w, y)], egui::Stroke::new(1.0, col));
+                                    ui.painter().line_segment([egui::pos2(x, y), egui::pos2(x + full_w, y)], egui::Stroke::new(1.0_f32, col));
                                 };
                                 ui.spacing_mut().item_spacing = egui::vec2(gap, 0.0);
                                 ui.horizontal(|ui| {
@@ -1524,7 +1524,7 @@ impl App {
                 theme::fade(ui, ("in_progress", n_jobs), job.finished.is_none(), |ui| {
                     ui.add_space(18.0);
                     theme::section(ui, "In progress");
-                    theme::card().stroke(egui::Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.5))).show(ui, |ui| {
+                    theme::card().stroke(egui::Stroke::new(1.0_f32, theme::ACCENT.gamma_multiply(0.5))).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui_progress(ui, ctx, job);
                     });
