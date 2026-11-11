@@ -52,7 +52,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC"
           security list-keychains -d user -s "$KC"
           APP="target/release/SlopComp.app"
-          for bin in "$APP/Contents/MacOS/comp" "$APP/Contents/MacOS/anime-comp"; do
+          for bin in "$APP/Contents/MacOS/comp" "$APP/Contents/MacOS/slopcomp"; do
             codesign --force --options runtime --timestamp -s "$MACOS_SIGN_IDENTITY" "$bin"
           done
           codesign --force --options runtime --timestamp -s "$MACOS_SIGN_IDENTITY" "$APP"

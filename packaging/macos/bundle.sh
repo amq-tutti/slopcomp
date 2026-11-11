@@ -10,7 +10,7 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 APP="target/release/SlopComp.app"
 rm -rf "$APP" target/release/anime-comp.app
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp target/release/anime-comp "$APP/Contents/MacOS/anime-comp"
+cp target/release/slopcomp "$APP/Contents/MacOS/slopcomp"
 cp target/release/comp "$APP/Contents/MacOS/comp"
 cp packaging/icon/icon.icns "$APP/Contents/Resources/icon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -23,7 +23,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>io.github.amq-tutti.slopcomp</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleExecutable</key><string>anime-comp</string>
+  <key>CFBundleExecutable</key><string>slopcomp</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>icon</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
@@ -57,4 +57,4 @@ if [[ "${1:-}" == "--dmg" ]]; then
   rm -rf "$STAGE"
   echo "built $DMG ($(du -h "$DMG" | cut -f1))"
 fi
-otool -L "$APP/Contents/MacOS/anime-comp" | tail -n +2
+otool -L "$APP/Contents/MacOS/slopcomp" | tail -n +2

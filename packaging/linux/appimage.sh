@@ -16,26 +16,26 @@ REL="$TARGET_DIR/release"
 APPDIR="$REL/AppDir"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-cp "$REL/anime-comp" "$REL/comp" "$APPDIR/usr/bin/"
-cp packaging/icon/icon_256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/anime-comp.png"
-cp packaging/icon/icon_256.png "$APPDIR/anime-comp.png"
-cat > "$APPDIR/anime-comp.desktop" <<DESKTOP
+cp "$REL/slopcomp" "$REL/comp" "$APPDIR/usr/bin/"
+cp packaging/icon/icon_256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/slopcomp.png"
+cp packaging/icon/icon_256.png "$APPDIR/slopcomp.png"
+cat > "$APPDIR/slopcomp.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=SlopComp
 Comment=Frame-exact anime source comparisons
-Exec=anime-comp %f
-Icon=anime-comp
+Exec=slopcomp %f
+Icon=slopcomp
 Categories=AudioVideo;Video;
 MimeType=application/toml;
 DESKTOP
-cp "$APPDIR/anime-comp.desktop" "$APPDIR/usr/share/applications/"
+cp "$APPDIR/slopcomp.desktop" "$APPDIR/usr/share/applications/"
 cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
-# `anime-comp.AppImage comp …` runs the CLI.
+# `SlopComp-….AppImage comp …` runs the CLI.
 if [ "$1" = "comp" ]; then shift; exec "$HERE/usr/bin/comp" "$@"; fi
-exec "$HERE/usr/bin/anime-comp" "$@"
+exec "$HERE/usr/bin/slopcomp" "$@"
 APPRUN
 chmod +x "$APPDIR/AppRun"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APPDIR/" 2>/dev/null || true
@@ -49,5 +49,5 @@ OUT="$REL/SlopComp-$VERSION-linux-$ARCH.AppImage"
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$ARCH "$TOOL" --no-appstream "$APPDIR" "$OUT" >/dev/null
 tar -C "$REL" -czf "$REL/comp-$VERSION-linux-$ARCH.tar.gz" comp
 echo "built $OUT ($(du -h "$OUT" | cut -f1))"
-echo "dynamic deps of anime-comp:"; ldd "$REL/anime-comp" | sed 's/^/  /'
-echo "max glibc symbol version: $(objdump -T "$REL/anime-comp" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+echo "dynamic deps of slopcomp:"; ldd "$REL/slopcomp" | sed 's/^/  /'
+echo "max glibc symbol version: $(objdump -T "$REL/slopcomp" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"

@@ -50,7 +50,7 @@ First public release.
   `xattr -dr com.apple.quarantine /Applications/SlopComp.app`.
 - **Linux** (x64, glibc 2.28 or later): `SlopComp-0.1.0-linux-x86_64.AppImage`; make it
   executable and run it. The `comp` command-line tool alone is in the `.tar.gz`.
-- **Windows** (x64): unzip `SlopComp-0.1.0-windows-x64.zip` and run `anime-comp.exe`. This
+- **Windows** (x64): unzip `SlopComp-0.1.0-windows-x64.zip` and run `SlopComp.exe`. This
   is the first Windows build, so please report anything that goes wrong.
 - `SHA256SUMS.txt` has the checksums of every download.
 

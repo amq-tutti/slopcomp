@@ -93,7 +93,7 @@ impl App {
         install_fonts(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx);
         let mut setup = cc.storage.and_then(|s| eframe::get_value::<Setup>(s, STORAGE_KEY)).unwrap_or_default();
-        // `anime-comp project.toml` opens a project.
+        // `slopcomp project.toml` opens a project.
         let mut project_path = None;
         if let Some(arg) = std::env::args().skip(1).find(|a| a.ends_with(".toml")) {
             let p = PathBuf::from(arg);

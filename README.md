@@ -46,7 +46,7 @@ Get the latest version from the [**Releases page**](https://github.com/amq-tutti
 | --- | --- | --- |
 | **macOS** (Apple Silicon, 11+) | `SlopComp-<version>-macos-arm64.dmg` | Not notarized: the first time, right-click the app and choose **Open**. |
 | **Linux** (x64, glibc 2.28+) | `SlopComp-<version>-linux-x86_64.AppImage` | `chmod +x` it and run. The `comp` tool alone is in the `.tar.gz`. |
-| **Windows** (x64) | `SlopComp-<version>-windows-x64.zip` | Unzip and run `anime-comp.exe`. |
+| **Windows** (x64) | `SlopComp-<version>-windows-x64.zip` | Unzip and run `SlopComp.exe`. |
 
 Everything is statically linked (ffmpeg, ffms2, zimg, dav1d), so there's nothing else to install.
 `SHA256SUMS.txt` on each release lists the checksums.
@@ -85,7 +85,7 @@ another. The PNGs, `comp.json` and `index.html` update immediately. From here yo
 the output folder or slow.pics for upload.
 
 Setups can be saved as TOML projects, which the command-line tool can run too
-(`comp project file.toml`), and `anime-comp file.toml` opens one in the app.
+(`comp project file.toml`), and `slopcomp file.toml` opens one in the app.
 
 <sub>Screenshots show *To Heart* (© AQUAPLUS / KSS) for illustration.</sub>
 

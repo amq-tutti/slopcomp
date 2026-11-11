@@ -8,7 +8,7 @@ license.workspace = true
 build = "build.rs"
 
 [[bin]]
-name = "anime-comp"
+name = "slopcomp"
 path = "src/main.rs"
 
 [dependencies]
