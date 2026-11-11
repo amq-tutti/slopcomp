@@ -8,9 +8,10 @@ use comp_core::comp::{CompResult, Event};
 use comp_core::pairing::Pairing;
 use comp_core::project::Project;
 use comp_core::season::{self, SeasonEvent, SeasonResult};
-use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions};
+use eframe::egui::{self, RichText, TextureHandle, TextureOptions};
 
 use crate::preview::{self, PreviewImage, Reply, Request, SourceConfig};
+use crate::theme;
 use crate::setup::{label_for, random_seed, Field, Order, Setup, SourceRow, MATRICES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,10 @@ struct SyncState {
     flicker: Option<usize>,
     /// Offset suggestions per source index (None while running).
     suggestions: std::collections::HashMap<usize, Option<Result<comp_core::sync::SyncSuggestion, String>>>,
+    /// The last finished suggestion per source, still drawn while its row fades out.
+    last_suggestion: std::collections::HashMap<usize, Result<comp_core::sync::SyncSuggestion, String>>,
+    /// The last non-empty status, still drawn while the status line fades out.
+    status_shown: String,
 }
 
 enum RunMsg {
@@ -84,6 +89,7 @@ const STORAGE_KEY: &str = "setup";
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&cc.egui_ctx);
+        crate::theme::apply(&cc.egui_ctx);
         let mut setup = cc.storage.and_then(|s| eframe::get_value::<Setup>(s, STORAGE_KEY)).unwrap_or_default();
         // `anime-comp project.toml` opens a project.
         let mut project_path = None;
@@ -121,6 +127,8 @@ impl App {
                 images: Vec::new(),
                 flicker: None,
                 suggestions: Default::default(),
+                last_suggestion: Default::default(),
+                status_shown: String::new(),
             },
             jobs: Vec::new(),
             toast: None,
@@ -130,8 +138,8 @@ impl App {
         };
 
         app.tab = tab;
-        // Developer flag --view=DIR: open a comparison in the viewer.
-        if let Some(d) = args.iter().find_map(|a| a.strip_prefix("--view=")) {
+        // Developer flag --view=DIR (repeatable): open comparisons in the viewer; the last one shows.
+        for d in args.iter().filter_map(|a| a.strip_prefix("--view=")) {
             app.viewer.open(Path::new(d));
             app.tab = Tab::Viewer;
         }
@@ -186,7 +194,7 @@ impl App {
         let path = match (&self.project_path, ask) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
-                .add_filter("Anime Comparisons project", &["toml"])
+                .add_filter("SlopComp project", &["toml"])
                 .set_file_name(format!("{}.toml", comp_core::comp::folder_name(&self.setup.display_name())))
                 .save_file(),
         };
@@ -217,14 +225,15 @@ impl App {
         self.sync.ready = None;
         self.sync.images.clear();
         self.sync.suggestions.clear();
+        self.sync.last_suggestion.clear();
         self.sync.error = None;
         self.sync.status.clear();
         self.tab = Tab::Select;
-        self.notify("Cleared sources, name and offsets; settings kept", false);
+        self.notify("Cleared sources, name, and offsets. Settings kept.", false);
     }
 
     fn open_project(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("Anime Comparisons project", &["toml"]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter("SlopComp project", &["toml"]).pick_file() {
             match Project::load(&p).map_err(|e| e.to_string()).and_then(|pr| Setup::from_project(&pr)) {
                 Ok(s) => {
                     self.setup = s;
@@ -350,7 +359,7 @@ impl App {
                         }
                         Event::Excluded { ranges } => {
                             for (a, b, why) in ranges {
-                                run.log.push(format!("excluding {:.1}-{:.1}s ({why})", a, b));
+                                run.log.push(format!("skipping {:.1}–{:.1} s: {why}", a, b));
                             }
                         }
                         Event::FramesPicked { frames, .. } => {
@@ -361,7 +370,7 @@ impl App {
                         _ => {}
                     },
                     SeasonEvent::EpisodeDone { result, .. } => {
-                        run.log.push(format!("done: {}", result.out_dir.display()));
+                        run.log.push(format!("saved to {}", result.out_dir.display()));
                         self.viewer.add(&result.out_dir);
                         run.results.push(*result);
                     }
@@ -394,19 +403,71 @@ fn install_fonts(ctx: &egui::Context) {
     use eframe::egui::{FontData, FontDefinitions, FontFamily};
     let mut fonts = FontDefinitions::default();
     for (name, bytes) in [
-        ("plex-sans", &include_bytes!("../fonts/IBMPlexSans.ttf")[..]),
+        ("instrument-sans", &include_bytes!("../fonts/InstrumentSans-Regular.ttf")[..]),
         ("plex-mono", &include_bytes!("../fonts/IBMPlexMono-Regular.ttf")[..]),
         ("plex-sans-jp", &include_bytes!("../fonts/IBMPlexSansJP-Regular.ttf")[..]),
     ] {
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
     }
     let prop = fonts.families.entry(FontFamily::Proportional).or_default();
-    prop.insert(0, "plex-sans".to_owned());
+    // Instrument Sans for the UI; IBM Plex Sans JP behind it for Japanese file names and titles.
+    prop.insert(0, "instrument-sans".to_owned());
     prop.insert(1, "plex-sans-jp".to_owned());
     let mono = fonts.families.entry(FontFamily::Monospace).or_default();
     mono.insert(0, "plex-mono".to_owned());
     mono.insert(1, "plex-sans-jp".to_owned());
     ctx.set_fonts(fonts);
+}
+
+/// Keyboard shortcuts by screen and view mode, for the "?" list in the top bar. The current screen's
+/// groups come first. One action per line.
+fn shortcut_groups(tab: Tab) -> Vec<theme::ShortcutGroup> {
+    use theme::ShortcutGroup as G;
+    let (sync, viewer) = (tab == Tab::Sync, tab == Tab::Viewer);
+    let mut groups = vec![
+        G { title: "Sync", current: sync, sub: false, rows: vec![(vec!["←", "→"], "Previous or next frame")] },
+        G {
+            title: "Sync · Flicker",
+            current: sync,
+            sub: true,
+            rows: vec![(vec!["1", "–", "5"], "Show that source"), (vec!["Space"], "Show the next source")],
+        },
+        G {
+            title: "Viewer",
+            current: viewer,
+            sub: false,
+            rows: vec![
+                (vec!["←", "→"], "Previous or next frame"),
+                (vec!["G", "S", "F"], "Side by side, Slider, Flicker"),
+                (vec!["scroll"], "Zoom all panels together"),
+                (vec!["drag"], "Pan when zoomed in"),
+                (vec!["0"], "Fit the frame to the window"),
+            ],
+        },
+        G {
+            title: "Viewer · Slider",
+            current: viewer,
+            sub: true,
+            rows: vec![
+                (vec!["1", "–", "9"], "Put that source on the right"),
+                (vec!["Shift", "1", "–", "9"], "Put that source on the left"),
+                (vec!["drag"], "Move the divider"),
+            ],
+        },
+        G {
+            title: "Viewer · Flicker",
+            current: viewer,
+            sub: true,
+            rows: vec![
+                (vec!["1", "–", "9"], "Show that source (from Side by side too)"),
+                (vec!["Space"], "Show the next source"),
+            ],
+        },
+    ];
+    // Stable sort: the current screen's groups move to the top and keep their order.
+    groups.sort_by_key(|g| !g.current);
+    groups.push(G { title: "Anywhere", current: false, sub: false, rows: vec![(vec!["?"], "Show or hide this list")] });
+    groups
 }
 
 pub fn open_external(target: &Path) {
@@ -434,29 +495,83 @@ impl eframe::App for App {
         self.pump_run();
         self.pump_preview(ctx);
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.add_space(4.0);
+        let bar = egui::Frame::new()
+            .fill(theme::BAR)
+            .inner_margin(egui::Margin::symmetric(16, theme::BAR_PAD_Y as i8))
+            .stroke(egui::Stroke::new(1.0, theme::BORDER));
+        egui::TopBottomPanel::top("top").frame(bar).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Anime Comparisons");
-                ui.add_space(12.0);
+                // Full row height before anything is placed, so the logo and name centre on the same
+                // line as the 32 pt tabs instead of on egui's default 26 pt row.
+                ui.set_min_height(32.0);
+                // Narrow windows: first drop the name next to the logo, then fold the project
+                // buttons into a menu. Decided from the widths the parts took last frame.
+                let fit_id = egui::Id::new("top_bar_fit");
+                let (prev_tabs, prev_buttons) = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(fit_id)).unwrap_or((600.0, 290.0));
+                let title_font = egui::FontId::proportional(16.0);
+                let title_w = ui.fonts(|f| f.layout_no_wrap("SlopComp".into(), title_font.clone(), theme::TEXT).size().x) + 8.0;
+                let avail = ui.available_width();
+                let show_title = avail >= prev_tabs + title_w + prev_buttons + 24.0;
+                let menu = avail < prev_tabs + prev_buttons + 24.0;
+                let start_x = ui.cursor().min.x;
+                let logo = theme::logo(ui);
+                if show_title {
+                    ui.label(RichText::new("SlopComp").font(title_font).color(theme::TEXT_BRIGHT));
+                } else {
+                    logo.on_hover_text("SlopComp");
+                }
+                ui.add_space(if show_title { 18.0 } else { 8.0 });
                 let running = self.running();
                 // Numbered tabs are the steps to make a comparison; the viewer stands apart (it also
                 // opens earlier comparisons) and stays usable while a job runs.
-                for (tab, name) in [(Tab::Select, "1  Select"), (Tab::Sync, "2  Sync"), (Tab::Create, "3  Create")] {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let steps = [(Tab::Select, 1, "Select"), (Tab::Sync, 2, "Sync"), (Tab::Create, 3, "Create")];
+                for (k, (tab, n, name)) in steps.into_iter().enumerate() {
+                    if k > 0 {
+                        theme::step_link(ui);
+                    }
                     let enabled = !(running && tab != Tab::Create);
-                    let r = ui
-                        .add_enabled(enabled, egui::SelectableLabel::new(self.tab == tab, name))
-                        .on_disabled_hover_text("Locked while a comparison is being created");
+                    let r = theme::step_tab(ui, Some(n), name, self.tab == tab, enabled);
+                    let r = if enabled { r } else { r.on_hover_text("Locked while a comparison is being created") };
                     if r.clicked() {
                         self.tab = tab;
                     }
                 }
-                ui.separator();
-                if ui.selectable_label(self.tab == Tab::Viewer, "Viewer").clicked() {
+                ui.add_space(14.0);
+                let (sep, _) = ui.allocate_exact_size(egui::vec2(1.0, 22.0), egui::Sense::hover());
+                ui.painter().rect_filled(sep, 0.0, theme::BORDER);
+                ui.add_space(14.0);
+                if theme::step_tab(ui, None, "Viewer", self.tab == Tab::Viewer, true).clicked() {
                     self.tab = Tab::Viewer;
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_enabled_ui(!running, |ui| {
+                let tabs_w = ui.cursor().min.x - start_x - if show_title { title_w } else { 0.0 };
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let clear_hint = "Start over: removes the sources, name, and offsets. Settings, history, and the Viewer's comparisons stay.";
+                let buttons = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let w = ui.add_enabled_ui(!running, |ui| {
+                        if menu {
+                            ui.menu_button("Project", |ui| {
+                                ui.set_min_width(150.0);
+                                if ui.button("Open…").clicked() {
+                                    ui.close_menu();
+                                    self.open_project();
+                                }
+                                if ui.button("Save").on_hover_text("Save the setup as a TOML project").clicked() {
+                                    ui.close_menu();
+                                    self.save_project(false);
+                                }
+                                if ui.button("Save as…").clicked() {
+                                    ui.close_menu();
+                                    self.save_project(true);
+                                }
+                                ui.separator();
+                                if ui.button("Clear").on_hover_text(clear_hint).clicked() {
+                                    ui.close_menu();
+                                    self.clear_comparison();
+                                }
+                            });
+                            return;
+                        }
                         if ui.button("Save as…").clicked() {
                             self.save_project(true);
                         }
@@ -466,32 +581,26 @@ impl eframe::App for App {
                         if ui.button("Open…").clicked() {
                             self.open_project();
                         }
-                        if ui
-                            .button("Clear")
-                            .on_hover_text("Clear sources, name and offsets to start over. Settings, history and comparisons open in the Viewer are kept.")
-                            .clicked()
-                        {
+                        if ui.button("Clear").on_hover_text(clear_hint).clicked() {
                             self.clear_comparison();
                         }
-                    });
+                    })
+                    .response
+                    .rect
+                    .width();
+                    // Keyboard shortcuts for every screen, in one place (usable while a job runs).
+                    let w0 = ui.min_rect().width();
+                    theme::shortcuts_button(ui, &shortcut_groups(self.tab));
+                    w + (ui.min_rect().width() - w0) + ui.spacing().item_spacing.x
                 });
+                // Only the full row of buttons tells how much room they need.
+                let buttons_w = if menu { prev_buttons } else { buttons.inner };
+                ui.ctx().data_mut(|d| d.insert_temp(fit_id, (tabs_w, buttons_w)));
             });
-            ui.add_space(4.0);
         });
 
-        if let Some((msg, err, at)) = &self.toast {
-            if at.elapsed().as_secs_f32() > 5.0 {
-                self.toast = None;
-            } else {
-                let (msg, err) = (msg.clone(), *err);
-                egui::TopBottomPanel::bottom("toast").show(ctx, |ui| {
-                    ui.colored_label(if err { Color32::from_rgb(220, 80, 80) } else { ui.visuals().text_color() }, msg);
-                });
-                ctx.request_repaint_after(std::time::Duration::from_millis(500));
-            }
-        }
-
-        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+        let page = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(18, 14));
+        egui::CentralPanel::default().frame(page).show(ctx, |ui| match self.tab {
             Tab::Select => self.ui_sources(ui),
             Tab::Sync => self.ui_sync(ui, ctx),
             Tab::Create => self.ui_create(ui, ctx),
@@ -499,6 +608,34 @@ impl eframe::App for App {
                 self.viewer.ui(ui, ctx);
             }
         });
+
+        // Toast: a floating card in the bottom-right corner, fading out after a few seconds.
+        if let Some((msg, err, at)) = &self.toast {
+            let age = at.elapsed().as_secs_f32();
+            if age > 5.0 {
+                self.toast = None;
+            } else {
+                let (msg, err) = (msg.clone(), *err);
+                let alpha = ((5.0 - age) / 0.4).min(1.0);
+                egui::Area::new(egui::Id::new("toast"))
+                    .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0))
+                    .order(egui::Order::Foreground)
+                    .interactable(false)
+                    .show(ctx, |ui| {
+                        ui.set_opacity(alpha);
+                        theme::tile().fill(theme::SURFACE_2).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                                ui.painter().circle_filled(dot.center(), 4.0, if err { theme::ERR } else { theme::OK });
+                                ui.label(RichText::new(msg).color(theme::TEXT_BRIGHT));
+                            });
+                        });
+                    });
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        }
+
+        theme::pointer_cursor_for_clickables(ctx);
     }
 }
 
@@ -508,10 +645,11 @@ impl App {
     fn ui_sources(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.label(
-                RichText::new("Drop video files or episode folders onto this window, or add them below. The first source is the reference timeline.")
+                RichText::new("Drop video files or episode folders here, or add them below. The first source is the reference: the others are aligned to it.")
                     .weak(),
             );
-            ui.add_space(8.0);
+            ui.add_space(10.0);
+            theme::section(ui, "Sources");
             self.ui_source_rows(ui);
             ui.horizontal(|ui| {
                 if ui.button("Add file…").clicked() {
@@ -530,72 +668,137 @@ impl App {
             });
 
             if let Some(p) = self.pairing() {
-                ui.add_space(6.0);
+                ui.add_space(14.0);
                 match p {
                     Ok(p) if p.rows.len() > 1 => {
                         let (complete, total) = (p.complete().count(), p.rows.len());
                         let rows = p.rows.clone();
-                        egui::CollapsingHeader::new(format!("Episodes: {complete} of {total} present in every source"))
-                            .id_salt("pairing")
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new("Ticked episodes go into the comparison; unticked ones are never opened.").weak());
-                                    if ui.small_button("All").clicked() {
-                                        self.setup.skip_episodes.clear();
-                                    }
-                                    if ui.small_button("None").clicked() {
+                        theme::section(ui, "Episodes");
+                        theme::card().show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let n_ticked = rows.iter().filter(|r| r.files.iter().all(|f| f.is_some()) && !self.setup.skip_episodes.contains(&r.episode.to_string())).count();
+                        let title = if complete == total {
+                            format!("{total} episodes found in every source")
+                        } else {
+                            format!("{complete} of {total} episodes found in every source")
+                        };
+                        theme::disclosure(
+                            ui,
+                            egui::Id::new("pairing"),
+                            false,
+                            |ui| {
+                                ui.label(RichText::new(title).color(theme::TEXT_BRIGHT));
+                                theme::pill(ui, &format!("{n_ticked} ticked"), if n_ticked == 0 { theme::WARN } else { theme::ACCENT });
+                            },
+                            |ui| {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Only ticked episodes are compared; the others aren't opened.").color(theme::TEXT_WEAK));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("Untick all").clicked() {
                                         self.setup.skip_episodes = rows.iter().map(|r| r.episode.to_string()).collect();
                                     }
-                                });
-                                egui::Grid::new("pairs").striped(true).show(ui, |ui| {
-                                    ui.strong("Include");
-                                    ui.strong("Episode");
-                                    for s in &self.setup.sources {
-                                        ui.strong(&s.label);
-                                    }
-                                    ui.end_row();
-                                    for r in &rows {
-                                        let ep = r.episode.to_string();
-                                        if r.files.iter().all(|f| f.is_some()) {
-                                            let mut on = !self.setup.skip_episodes.contains(&ep);
-                                            if ui.checkbox(&mut on, "").changed() {
-                                                if on {
-                                                    self.setup.skip_episodes.retain(|e| e != &ep);
-                                                } else {
-                                                    self.setup.skip_episodes.push(ep.clone());
-                                                }
-                                            }
-                                        } else {
-                                            ui.label("");
-                                        }
-                                        ui.label(&ep);
-                                        for f in &r.files {
-                                            match f {
-                                                Some(f) => ui.label(f.file_name().unwrap_or_default().to_string_lossy()),
-                                                None => ui.colored_label(Color32::from_rgb(220, 80, 80), "missing"),
-                                            };
-                                        }
-                                        ui.end_row();
+                                    if ui.small_button("Tick all").clicked() {
+                                        self.setup.skip_episodes.clear();
                                     }
                                 });
                             });
+                            ui.add_space(4.0);
+                            // The table sits in an inset with column headings and a line under each row.
+                            theme::code_panel().inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                // Fixed columns for the checkbox and episode; the source columns share what is
+                                // left, and long file names are cut with "…" (full path on hover). Laid out by
+                                // hand rather than with a Grid, which sizes columns to their longest text.
+                                let full_w = ui.available_width();
+                                let (check_w, ep_w, gap, row_h) = (16.0, 72.0, 16.0, 30.0);
+                                let n_src = self.setup.sources.len().max(1) as f32;
+                                let col_w = ((full_w - check_w - ep_w - gap * (n_src + 1.0)) / n_src).max(60.0);
+                                let cell = |ui: &mut egui::Ui, w: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
+                                    ui.allocate_ui_with_layout(egui::vec2(w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                        ui.set_min_size(egui::vec2(w, row_h));
+                                        add(ui);
+                                    });
+                                };
+                                let line = |ui: &mut egui::Ui, strong: bool| {
+                                    let y = ui.cursor().top();
+                                    let x = ui.min_rect().left();
+                                    let col = if strong { theme::BORDER } else { theme::BORDER.gamma_multiply(0.5) };
+                                    ui.painter().line_segment([egui::pos2(x, y), egui::pos2(x + full_w, y)], egui::Stroke::new(1.0, col));
+                                };
+                                ui.spacing_mut().item_spacing = egui::vec2(gap, 0.0);
+                                ui.horizontal(|ui| {
+                                    cell(ui, check_w, &mut |_| {});
+                                    let head = |t: &str| RichText::new(t.to_uppercase()).size(11.0).color(theme::TEXT_WEAK).extra_letter_spacing(1.0);
+                                    cell(ui, ep_w, &mut |ui| {
+                                        ui.add(egui::Label::new(head("Episode")).truncate());
+                                    });
+                                    for s in &self.setup.sources {
+                                        cell(ui, col_w, &mut |ui| {
+                                            ui.add(egui::Label::new(head(&s.label)).truncate());
+                                        });
+                                    }
+                                });
+                                for r in &rows {
+                                    line(ui, std::ptr::eq(r, &rows[0]));
+                                    let ep = r.episode.to_string();
+                                    let complete_row = r.files.iter().all(|f| f.is_some());
+                                    let mut on = complete_row && !self.setup.skip_episodes.contains(&ep);
+                                    // Unticked rows are dimmed so the selection reads at a glance.
+                                    let (ep_col, file_col) = if on { (theme::TEXT_BRIGHT, theme::TEXT) } else { (theme::TEXT_WEAK, theme::TEXT_WEAK) };
+                                    let mut toggled = false;
+                                    ui.horizontal(|ui| {
+                                        cell(ui, check_w, &mut |ui| {
+                                            if complete_row && theme::checkbox(ui, &mut on, "").changed() {
+                                                toggled = true;
+                                            }
+                                        });
+                                        cell(ui, ep_w, &mut |ui| {
+                                            ui.label(RichText::new(&ep).color(ep_col).strong());
+                                        });
+                                        for f in &r.files {
+                                            cell(ui, col_w, &mut |ui| match f {
+                                                Some(f) => {
+                                                    let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                                    ui.add(egui::Label::new(RichText::new(&name).size(13.0).color(file_col)).truncate())
+                                                        .on_hover_text(f.display().to_string());
+                                                }
+                                                None => {
+                                                    theme::pill(ui, "missing", theme::ERR);
+                                                }
+                                            });
+                                        }
+                                    });
+                                    if toggled {
+                                        if on {
+                                            self.setup.skip_episodes.retain(|e| e != &ep);
+                                        } else {
+                                            self.setup.skip_episodes.push(ep.clone());
+                                        }
+                                    }
+                                }
+                            });
+                            },
+                        );
+                        });
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        ui.colored_label(Color32::from_rgb(220, 80, 80), e.clone());
+                        ui.colored_label(theme::ERR, e.clone());
                     }
                 }
             }
 
-            ui.add_space(14.0);
-            ui.separator();
-            ui.heading("Settings");
-            ui.add_space(4.0);
-            self.ui_settings(ui);
+            ui.add_space(18.0);
+            theme::section(ui, "Settings");
+            theme::card().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                self.ui_settings(ui);
+            });
 
-            ui.add_space(14.0);
+            ui.add_space(16.0);
             let problems = self.setup.problems();
-            if ui.add_enabled(problems.is_empty(), egui::Button::new(RichText::new("Next: 2  Sync").strong())).clicked() {
+            if ui.add_enabled(problems.is_empty(), theme::primary("Next: Sync  →")).clicked() {
                 self.tab = Tab::Sync;
             }
             for p in problems {
@@ -609,22 +812,23 @@ impl App {
         let mut action: Option<(usize, i32)> = None; // (index, -1 up / +1 down / 0 remove)
         for i in 0..n {
             let ref_row = i == 0;
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            theme::tile().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let row = &mut self.setup.sources[i];
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut row.label).desired_width(140.0).hint_text("Label"));
                     if ref_row {
-                        ui.label(RichText::new("reference").small().weak());
+                        theme::pill(ui, "reference", theme::ACCENT).on_hover_text("The first source is the timeline the others are aligned to");
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Remove").clicked() {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        if theme::icon_button(ui, theme::Icon::Remove, true).on_hover_text("Remove").clicked() {
                             action = Some((i, 0));
                         }
-                        if ui.add_enabled(i + 1 < n, egui::Button::new("Down").small()).on_hover_text("Move down").clicked() {
+                        if theme::icon_button(ui, theme::Icon::Down, i + 1 < n).on_hover_text("Move down").clicked() {
                             action = Some((i, 1));
                         }
-                        if ui.add_enabled(i > 0, egui::Button::new("Up").small()).on_hover_text("Move up (top = reference)").clicked() {
+                        if theme::icon_button(ui, theme::Icon::Up, i > 0).on_hover_text("Move up (the top source is the reference)").clicked() {
                             action = Some((i, -1));
                         }
                     });
@@ -659,14 +863,14 @@ impl App {
                     if row.field != Field::Progressive {
                         egui::ComboBox::from_id_salt(("order", i))
                             .selected_text(match row.order {
-                                Order::Auto => "Order: auto",
-                                Order::Tff => "TFF",
-                                Order::Bff => "BFF",
+                                Order::Auto => "Field order: auto",
+                                Order::Tff => "Top field first",
+                                Order::Bff => "Bottom field first",
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut row.order, Order::Auto, "Order: auto");
-                                ui.selectable_value(&mut row.order, Order::Tff, "TFF");
-                                ui.selectable_value(&mut row.order, Order::Bff, "BFF");
+                                ui.selectable_value(&mut row.order, Order::Auto, "Field order: auto");
+                                ui.selectable_value(&mut row.order, Order::Tff, "Top field first");
+                                ui.selectable_value(&mut row.order, Order::Bff, "Bottom field first");
                             });
                     }
                     ui.add_space(10.0);
@@ -716,9 +920,11 @@ impl App {
             ui.label("Frames");
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(&mut s.frames).range(1..=500));
-                ui.label("per episode, seed");
+                ui.label("per episode");
+                ui.add_space(12.0);
+                ui.label("Seed").on_hover_text("The same seed picks the same frames again");
                 ui.add(egui::DragValue::new(&mut s.seed));
-                if ui.button("New seed").on_hover_text("Pick a new random seed").clicked() {
+                if ui.button("New seed").on_hover_text("Pick different frames").clicked() {
                     s.seed = random_seed();
                 }
             });
@@ -727,23 +933,23 @@ impl App {
             ui.label("Skip");
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut s.skip_black, "Black screens");
+                    theme::checkbox(ui, &mut s.skip_black, "Black screens");
                     if s.skip_black {
                         ui.add(egui::Slider::new(&mut s.black_threshold, 0.01..=0.25).text("threshold"))
-                            .on_hover_text("Mean brightness below which a frame is skipped. Raise it to also skip dark scenes.");
+                            .on_hover_text("Frames darker than this are skipped. Raise it to skip dark scenes too.");
                     }
                 });
-                ui.checkbox(&mut s.skip_scene_changes, "Scene changes (cuts and fades)");
-                ui.checkbox(&mut s.skip_duplicates, "Near-duplicate shots");
-                ui.checkbox(&mut s.skip_flat, "Flat frames (solid colours, title cards)");
-                ui.checkbox(&mut s.exclude_op_ed, "OP/ED (from chapter names)");
+                theme::checkbox(ui, &mut s.skip_scene_changes, "Scene changes (cuts and fades)");
+                theme::checkbox(ui, &mut s.skip_duplicates, "Near-duplicate shots");
+                theme::checkbox(ui, &mut s.skip_flat, "Flat frames (solid colours, title cards)");
+                theme::checkbox(ui, &mut s.exclude_op_ed, "OP/ED (from chapter names)");
             });
             ui.end_row();
 
             ui.label("Frame type");
             ui.horizontal(|ui| {
                 let mut on = s.frame_type.is_some();
-                ui.checkbox(&mut on, "Only frames that are");
+                theme::checkbox(ui, &mut on, "Only frames that are");
                 if on && s.frame_type.is_none() {
                     s.frame_type = Some((s.sources.len().saturating_sub(1), "B".into()));
                 }
@@ -771,11 +977,11 @@ impl App {
             ui.end_row();
 
             ui.label("Anamorphic");
-            ui.checkbox(&mut s.stretch_anamorphic, "Stretch to display aspect (e.g. DVD 720×480 to 853×480)");
+            theme::checkbox(ui, &mut s.stretch_anamorphic, "Stretch to display aspect (DVD 720×480 becomes 853×480)");
             ui.end_row();
 
             ui.label("Borders");
-            ui.checkbox(&mut s.crop_borders, "Crop black borders (pillarbox / letterbox), detected per source");
+            theme::checkbox(ui, &mut s.crop_borders, "Crop black borders (pillarbox and letterbox), detected per source");
             ui.end_row();
         });
     }
@@ -813,6 +1019,7 @@ impl App {
                         .collect();
                 }
                 Reply::Suggestion { index, result } => {
+                    self.sync.last_suggestion.insert(index, result.clone());
                     self.sync.suggestions.insert(index, Some(result));
                 }
                 Reply::Error(e) => {
@@ -828,18 +1035,80 @@ impl App {
     fn sync_files(&mut self) -> Result<(Vec<PathBuf>, Vec<String>), String> {
         let ep = self.sync.episode;
         match self.pairing() {
-            None => Err("Add at least two sources.".into()),
+            None => Err("Add at least two sources in step 1, Select.".into()),
             Some(Err(e)) => Err(e.clone()),
             Some(Ok(p)) => {
                 let rows: Vec<_> = p.complete().cloned().collect();
                 if rows.is_empty() {
-                    return Err("No episode is present in every source.".into());
+                    return Err("No episode was found in every source. Check the folders in step 1, Select.".into());
                 }
                 let names = rows.iter().map(|r| r.episode.to_string()).collect();
                 let row = &rows[ep.min(rows.len() - 1)];
                 Ok((row.files.iter().map(|f| f.clone().unwrap()).collect(), names))
             }
         }
+    }
+
+    fn sync_episode_picker(&mut self, ui: &mut egui::Ui, episodes: &[String]) {
+        if episodes.len() > 1 {
+            egui::ComboBox::from_id_salt("sync_ep")
+                .selected_text(episodes.get(self.sync.episode).cloned().unwrap_or_default())
+                .show_ui(ui, |ui| {
+                    for (i, e) in episodes.iter().enumerate() {
+                        ui.selectable_value(&mut self.sync.episode, i, e);
+                    }
+                });
+            theme::vsep(ui);
+        }
+    }
+
+    /// Side by side / Flicker, the same switch as the viewer's.
+    fn sync_view_switch(&mut self, ui: &mut egui::Ui) {
+        let modes: [(&str, &str, &[&str]); 2] =
+            [("Side by side", "All sources at once", &[]), ("Flicker", "One source at a time", &[])];
+        if let Some(i) = theme::segmented(ui, "sync_view_mode", &modes, self.sync.flicker.is_some() as usize) {
+            self.sync.flicker = (i == 1).then_some(0);
+        }
+    }
+
+    fn sync_next_button(&mut self, ui: &mut egui::Ui) {
+        if ui.add(theme::primary("Next: Create  →")).on_hover_text("Review the setup and create the comparison").clicked() {
+            self.tab = Tab::Create;
+        }
+    }
+
+    fn sync_step_back(&mut self, ui: &mut egui::Ui, ready: &Option<(i32, Vec<f64>)>) {
+        if ready.is_some() {
+            for (d, txt) in [(-24, "-1s"), (-1, "-1")] {
+                if ui.button(txt).clicked() {
+                    self.sync.frame = (self.sync.frame + d).max(0);
+                }
+            }
+        }
+    }
+
+    /// Right-to-left: Random, time, frame number, +1s, +1, then the slider filling what is left.
+    /// Returns the slider's width.
+    fn sync_frame_tail(&mut self, ui: &mut egui::Ui, ready: &Option<(i32, Vec<f64>)>) -> f32 {
+        let Some((n, times)) = ready else { return 0.0 };
+        let n = *n;
+        if ui.button("Random").clicked() {
+            let seed = random_seed();
+            self.sync.frame = (seed % n as u64) as i32;
+        }
+        let t = times.get(self.sync.frame as usize).copied().unwrap_or(0.0);
+        ui.label(RichText::new(format!("{}:{:06.3}", (t / 60.0) as i64, t % 60.0)).monospace().color(theme::TEXT_WEAK));
+        ui.add(egui::DragValue::new(&mut self.sync.frame).range(0..=n - 1).prefix("frame "));
+        theme::vsep(ui);
+        for (d, txt) in [(24, "+1s"), (1, "+1")] {
+            if ui.button(txt).clicked() {
+                self.sync.frame = (self.sync.frame + d).min(n - 1);
+            }
+        }
+        let w = (ui.available_width() - 8.0).max(80.0);
+        ui.spacing_mut().slider_width = w;
+        ui.add(egui::Slider::new(&mut self.sync.frame, 0..=n - 1).show_value(false));
+        w
     }
 
     fn ui_sync(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
@@ -861,52 +1130,86 @@ impl App {
             self.sync.ready = None;
             self.sync.images.clear();
             self.sync.suggestions.clear();
+            self.sync.last_suggestion.clear();
         }
 
-        // Controls.
-        ui.horizontal_wrapped(|ui| {
-            if episodes.len() > 1 {
-                egui::ComboBox::from_id_salt("sync_ep")
-                    .selected_text(episodes.get(self.sync.episode).cloned().unwrap_or_default())
-                    .show_ui(ui, |ui| {
-                        for (i, e) in episodes.iter().enumerate() {
-                            ui.selectable_value(&mut self.sync.episode, i, e);
-                        }
+        // Controls: one toolbar. Episode and frame stepping on the left (the slider takes the spare
+        // width), view switch and the way on to step 3 on the right. When that doesn't fit, two
+        // rows: episode, view switch and Next above; frame stepping below.
+        let ready = self.sync.ready.take();
+        theme::toolbar().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let fit_id = egui::Id::new("sync_toolbar_need");
+            let need: f32 = ui.ctx().data(|d| d.get_temp(fit_id)).unwrap_or(980.0);
+            let one_row = ui.available_width() >= need;
+            ui.horizontal(|ui| {
+                ui.set_min_height(32.0); // the primary button's height, so both ends centre on the same line
+                self.sync_episode_picker(ui, &episodes);
+                if !one_row {
+                    self.sync_view_switch(ui);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.sync_next_button(ui));
+                    return;
+                }
+                let row_left = ui.min_rect().left();
+                self.sync_step_back(ui, &ready);
+                let left_w = ui.cursor().min.x - row_left;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.sync_next_button(ui);
+                    theme::vsep(ui);
+                    self.sync_view_switch(ui);
+                    if ready.is_some() {
+                        theme::vsep(ui);
+                    }
+                    let slider_w = self.sync_frame_tail(ui, &ready);
+                    // Room this row needs: the controls on both sides plus a usable slider. Only
+                    // measured once the frame controls exist, or the row would look smaller than it is.
+                    if ready.is_some() {
+                        let right_w = ui.min_rect().width() - slider_w;
+                        ui.ctx().data_mut(|d| d.insert_temp(fit_id, left_w + right_w + 160.0));
+                    }
+                });
+            });
+            if !one_row && ready.is_some() {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    self.sync_step_back(ui, &ready);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        self.sync_frame_tail(ui, &ready);
                     });
-            }
-            if ui.button(RichText::new("Next: 3  Create").strong()).on_hover_text("Review the setup and create the comparison").clicked() {
-                self.tab = Tab::Create;
-            }
-            if let Some((n, times)) = &self.sync.ready {
-                let n = *n;
-                for (d, txt) in [(-24, "-1s"), (-1, "-1")] {
-                    if ui.button(txt).clicked() {
-                        self.sync.frame = (self.sync.frame + d).max(0);
-                    }
-                }
-                ui.add(egui::Slider::new(&mut self.sync.frame, 0..=n - 1).show_value(false));
-                for (d, txt) in [(1, "+1"), (24, "+1s")] {
-                    if ui.button(txt).clicked() {
-                        self.sync.frame = (self.sync.frame + d).min(n - 1);
-                    }
-                }
-                ui.add(egui::DragValue::new(&mut self.sync.frame).range(0..=n - 1).prefix("frame "));
-                let t = times.get(self.sync.frame as usize).copied().unwrap_or(0.0);
-                ui.label(format!("{}:{:06.3}", (t / 60.0) as i64, t % 60.0));
-                if ui.button("Random").clicked() {
-                    let seed = random_seed();
-                    self.sync.frame = (seed % n as u64) as i32;
-                }
+                });
             }
         });
+        self.sync.ready = ready;
+        ui.add_space(4.0);
         if !self.sync.status.is_empty() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(&self.sync.status);
-            });
+            self.sync.status_shown = self.sync.status.clone();
         }
+        let n_src = self.setup.sources.len();
+        let flick_on = self.sync.flicker.is_some();
+        theme::fade(ui, "sync_flicker_sources", flick_on, |ui| {
+            ui.horizontal(|ui| {
+                let names: Vec<String> = self.setup.sources.iter().enumerate().map(|(i, r)| format!("{} {}", i + 1, r.label)).collect();
+                let keys: Vec<String> = (1..=names.len()).map(|k| k.to_string()).collect();
+                let key_refs: Vec<[&str; 1]> = keys.iter().map(|k| [k.as_str()]).collect();
+                let opts: Vec<(&str, &str, &[&str])> =
+                    names.iter().zip(&key_refs).map(|(n, k)| (n.as_str(), "Show this source", &k[..])).collect();
+                let cur = self.sync.flicker.unwrap_or(0).min(n_src.saturating_sub(1));
+                if let Some(i) = theme::segmented(ui, "sync_flicker_source", &opts, cur) {
+                    self.sync.flicker = Some(i);
+                }
+                ui.label(RichText::new("Space for the next source").small().color(theme::TEXT_WEAK));
+            });
+            ui.add_space(4.0);
+        });
+        let status = &self.sync.status_shown;
+        theme::fade(ui, "sync_status", !self.sync.status.is_empty(), |ui| {
+            ui.horizontal(|ui| {
+                theme::busy(ui, "sync_status", true, theme::BG);
+                ui.label(status);
+            });
+        });
         if let Some(e) = &self.sync.error {
-            ui.colored_label(Color32::from_rgb(220, 80, 80), e);
+            ui.colored_label(theme::ERR, e);
         }
 
         // Offsets for non-reference sources, with automatic suggestions. With episode folders, edits
@@ -916,66 +1219,66 @@ impl App {
         let mut ask: Vec<usize> = Vec::new();
         ui.horizontal_wrapped(|ui| {
             for (i, r) in self.setup.sources.iter_mut().enumerate().skip(1) {
-                ui.group(|ui| {
+                theme::tile().show(ui, |ui| {
                     ui.vertical(|ui| {
                         let (mut os, mut of) = r.offset_for(cur_ep.as_deref());
                         let before = (os, of);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&r.label).strong());
-                            if ui.small_button("-1").clicked() {
+                            if ui.button("-1").clicked() {
                                 of -= 1;
                             }
                             ui.add(egui::DragValue::new(&mut of).speed(0.2).suffix(" f"));
-                            if ui.small_button("+1").clicked() {
+                            if ui.button("+1").clicked() {
                                 of += 1;
                             }
                             ui.add(egui::DragValue::new(&mut os).speed(0.01).suffix(" s").max_decimals(3));
                             let busy = matches!(self.sync.suggestions.get(&i), Some(None));
                             if ui
-                                .add_enabled(ready && !busy, egui::Button::new("Auto").small())
+                                .add_enabled(ready && !busy, egui::Button::new("Auto"))
                                 .on_hover_text("Find the offset by matching scene cuts (decodes about a minute of video)")
                                 .clicked()
                             {
                                 ask.push(i);
                             }
                         });
-                        match self.sync.suggestions.get(&i) {
-                            Some(None) => {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label(RichText::new("matching scene cuts…").small());
-                                });
-                            }
-                            Some(Some(Ok(sg))) => {
+                        let state = self.sync.suggestions.get(&i);
+                        theme::fade(ui, ("sugg_busy", i), matches!(state, Some(None)), |ui| {
+                            ui.horizontal(|ui| {
+                                theme::busy(ui, ("sugg", i), true, theme::SURFACE);
+                                ui.label(RichText::new("matching scene cuts…").small());
+                            });
+                        });
+                        let last = self.sync.last_suggestion.get(&i);
+                        theme::fade(ui, ("sugg_result", i), matches!(state, Some(Some(_))), |ui| match last {
+                            Some(Ok(sg)) => {
                                 let precision =
                                     if sg.precision_frames == 0 { "frame-exact".to_string() } else { format!("±{} f", sg.precision_frames) };
                                 let (verdict, color) = if sg.confidence >= 0.5 {
-                                    ("confident", Color32::from_rgb(80, 180, 100))
+                                    ("confident", theme::OK)
                                 } else if sg.confidence >= 0.3 {
-                                    ("check it", Color32::from_rgb(220, 170, 60))
+                                    ("uncertain", theme::WARN)
                                 } else {
-                                    ("unreliable", Color32::from_rgb(220, 80, 80))
+                                    ("unreliable", theme::ERR)
                                 };
                                 ui.horizontal(|ui| {
-                                    ui.colored_label(
-                                        color,
-                                        RichText::new(format!("{:+.3} s ({precision}), {verdict} {:.2}", sg.offset_seconds, sg.confidence)).small(),
-                                    )
-                                    .on_hover_text(format!(
+                                    ui.label(RichText::new(format!("Suggested {:+.3} s", sg.offset_seconds)).color(theme::TEXT_BRIGHT));
+                                    ui.label(RichText::new(precision).small().color(theme::TEXT_WEAK));
+                                    theme::pill(ui, &format!("{verdict} {:.2}", sg.confidence), color).on_hover_text(format!(
                                         "{}: {} of {} cuts matched; correlation {:.2} vs {:.2} at wrong offsets",
                                         sg.method, sg.matched_cuts, sg.ref_cuts, sg.correlation, sg.baseline
                                     ));
-                                    if ui.small_button("Apply").clicked() {
+                                    if ui.button("Apply").clicked() {
                                         os = sg.offset_seconds;
                                         of = 0;
                                     }
                                 });
                             }
-                            Some(Some(Err(e))) => {
-                                ui.colored_label(Color32::from_rgb(220, 80, 80), RichText::new(e).small());
+                            Some(Err(e)) => {
+                                ui.colored_label(theme::ERR, RichText::new(e).small());
                             }
                             None => {}
-                        }
+                        });
                         // Store edits: per episode when browsing episodes, else as the default.
                         if (os, of) != before {
                             match &cur_ep {
@@ -991,29 +1294,24 @@ impl App {
                         if let Some(ep) = &cur_ep {
                             ui.horizontal(|ui| {
                                 if r.episode_offsets.contains_key(ep) {
-                                    ui.label(RichText::new(format!("{ep} only")).small().color(Color32::from_rgb(220, 170, 60)))
+                                    ui.label(RichText::new(format!("Own offset for {ep}")).small().color(theme::WARN))
                                         .on_hover_text("This episode has its own offset; other episodes use the default offset");
                                     if ui.small_button("Use for all episodes").on_hover_text("Make this the default and clear every episode's own offset").clicked() {
                                         r.offset_seconds = os;
                                         r.offset_frames = of;
                                         r.episode_offsets.clear();
                                     }
-                                    if ui.small_button("Reset").on_hover_text("Go back to the default offset for this episode").clicked() {
+                                    if ui.small_button("Use default").on_hover_text("Go back to the default offset for this episode").clicked() {
                                         r.episode_offsets.remove(ep);
                                     }
                                 } else {
-                                    ui.label(RichText::new("default offset").small().weak())
+                                    ui.label(RichText::new("Default offset").small().weak())
                                         .on_hover_text("Changing it here sets an offset for this episode only");
                                 }
                             });
                         }
                     });
                 });
-            }
-            ui.separator();
-            let mut flick = self.sync.flicker.is_some();
-            if ui.checkbox(&mut flick, "Flicker").on_hover_text("Show one source at a time; keys 1-5 switch").changed() {
-                self.sync.flicker = flick.then_some(0);
             }
         });
         if self.auto_sync && ready {
@@ -1042,10 +1340,18 @@ impl App {
             }
         }
 
-        // Keyboard: arrows step frames, digits pick the flicker source.
-        if let Some((n, _)) = &self.sync.ready {
+        // Keyboard: arrows step frames; in Flicker, digits pick the source and Space goes to the
+        // next one (as in the viewer). Not while a text field is being edited.
+        if let Some((n, _)) = self.sync.ready.as_ref().filter(|_| !ui.ctx().wants_keyboard_input()) {
             let n = *n;
+            let n_src = self.setup.sources.len().max(1);
             ui.input(|i| {
+                // Space steps through sources only while flickering; it doesn't switch modes.
+                if i.key_pressed(egui::Key::Space) {
+                    if let Some(f) = self.sync.flicker {
+                        self.sync.flicker = Some((f + 1) % n_src);
+                    }
+                }
                 if i.key_pressed(egui::Key::ArrowRight) {
                     self.sync.frame = (self.sync.frame + 1).min(n - 1);
                 }
@@ -1117,13 +1423,14 @@ impl App {
     /// Step 3: what will be made, the button that makes it, the job in progress, and this session's history.
     fn ui_create(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let running = self.running();
-        let mut view: Option<PathBuf> = None;
+        let mut view: Vec<PathBuf> = Vec::new();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.heading("Comparison");
-            ui.add_space(4.0);
+            theme::section(ui, "What will be created");
+            let card = theme::card().show(ui, |ui| {
+            ui.set_width(ui.available_width());
             self.ui_summary(ui);
 
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             let problems = self.setup.problems();
             let sel = self.selected_episodes();
             let none = sel.as_ref().is_some_and(|v| v.is_empty());
@@ -1136,12 +1443,12 @@ impl App {
             let hover = if running {
                 "A comparison is already being created"
             } else if none {
-                "No episodes ticked in 1  Select"
+                "No episodes are ticked in step 1, Select"
             } else {
                 "Existing comparisons with the same name are replaced"
             };
             if ui
-                .add_enabled(problems.is_empty() && !none && !running, egui::Button::new(RichText::new(text).strong()))
+                .add_enabled(problems.is_empty() && !none && !running, theme::primary(text))
                 .on_hover_text(hover)
                 .on_disabled_hover_text(hover)
                 .clicked()
@@ -1149,34 +1456,46 @@ impl App {
                 self.start_run(ctx, sel);
             }
             for p in problems {
-                ui.label(RichText::new(p).weak());
+                ui.label(RichText::new(p).color(theme::WARN));
             }
+            });
+            let _ = card;
 
-            if let Some(job) = self.jobs.last_mut().filter(|j| j.finished.is_none()) {
-                ui.add_space(14.0);
-                ui.separator();
-                ui.heading("In progress");
-                ui.add_space(4.0);
-                ui_progress(ui, ctx, job);
+            let n_jobs = self.jobs.len();
+            if let Some(job) = self.jobs.last_mut() {
+                // Keyed by job number, so each new job fades in fresh; a finished one fades out
+                // showing its final state.
+                theme::fade(ui, ("in_progress", n_jobs), job.finished.is_none(), |ui| {
+                    ui.add_space(18.0);
+                    theme::section(ui, "In progress");
+                    theme::card().stroke(egui::Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.5))).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui_progress(ui, ctx, job);
+                    });
+                });
             }
 
             let done = self.jobs.iter().filter(|j| j.finished.is_some()).count();
             if done > 0 {
-                ui.add_space(14.0);
-                ui.separator();
-                ui.heading("History");
-                ui.label(RichText::new("Comparisons created since the app was opened, newest first.").small().weak());
+                ui.add_space(18.0);
+                theme::section(ui, "History");
+                ui.label(RichText::new("Created since SlopComp opened, newest first.").small().color(theme::TEXT_WEAK));
                 ui.add_space(4.0);
                 let n = self.jobs.len();
                 for (k, job) in self.jobs.iter().enumerate().rev().filter(|(_, j)| j.finished.is_some()) {
-                    if let Some(d) = ui_history_entry(ui, job, k + 1 == n) {
-                        view = Some(d);
-                    }
+                    theme::fade(ui, ("history", k), true, |ui| {
+                        if let Some(dirs) = ui_history_entry(ui, job, k + 1 == n) {
+                            view = dirs;
+                        }
+                    });
                 }
             }
         });
-        if let Some(d) = view {
-            self.viewer.open(&d);
+        if let Some(first) = view.first() {
+            for d in &view {
+                self.viewer.add(d);
+            }
+            self.viewer.open(first);
             self.tab = Tab::Viewer;
         }
     }
@@ -1187,62 +1506,72 @@ impl App {
         let sel = self.selected_episodes();
         let s = &self.setup;
         let weak = |t: String| RichText::new(t).weak();
+        let key = |ui: &mut egui::Ui, t: &str| {
+            ui.label(RichText::new(t).color(theme::TEXT_WEAK));
+        };
         egui::Grid::new("summary").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
-            ui.label("Name");
+            key(ui, "Name");
             ui.label(s.display_name());
             ui.end_row();
 
-            ui.label("Output folder");
-            ui.label(if s.out_dir.trim().is_empty() { weak("not set".into()) } else { RichText::new(&s.out_dir) });
+            key(ui, "Output folder");
+            if s.out_dir.trim().is_empty() {
+                ui.label(weak("not set".into()));
+            } else {
+                theme::path_label(ui, &s.out_dir, theme::TEXT);
+            }
             ui.end_row();
 
             if !all.is_empty() {
-                ui.label("Episodes");
+                key(ui, "Episodes");
                 let list = sel.clone().unwrap_or_else(|| all.clone());
                 ui.label(format!("{} of {}: {}", list.len(), all.len(), list.join(", ")));
                 ui.end_row();
             }
 
-            ui.label("Sources");
+            // Name at the top of the cell, level with the first source rather than centred on the list.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| key(ui, "Sources"));
             if s.sources.is_empty() {
-                ui.label(weak("none yet".into()));
+                ui.label(weak("none".into()));
             }
             ui.vertical(|ui| {
-                egui::Grid::new("summary_sources").num_columns(4).spacing([14.0, 4.0]).show(ui, |ui| {
-                    for (i, r) in s.sources.iter().enumerate() {
-                        ui.strong(&r.label);
-                        let mut fields = match r.field {
-                            Field::Progressive => "progressive".to_string(),
-                            Field::Ivtc => "IVTC".to_string(),
-                            Field::Deinterlace => "deinterlace".to_string(),
-                        };
-                        if r.field != Field::Progressive {
-                            fields += match r.order {
-                                Order::Auto => "",
-                                Order::Tff => " (TFF)",
-                                Order::Bff => " (BFF)",
-                            };
-                        }
-                        let matrix = MATRICES.iter().find(|(m, _)| *m == r.matrix).map(|(_, n)| *n).unwrap_or("?");
-                        ui.label(format!("{fields}, matrix {}", matrix.to_lowercase()));
-                        let offset = if i == 0 {
-                            weak("reference".into())
-                        } else {
-                            let mut t = format!("offset {:+.3} s {:+} f", r.offset_seconds, r.offset_frames);
-                            if !r.episode_offsets.is_empty() {
-                                t += &format!(", own offset for {}", r.episode_offsets.keys().cloned().collect::<Vec<_>>().join(", "));
-                            }
-                            RichText::new(t)
-                        };
-                        ui.label(offset);
-                        ui.label(weak(r.path.clone())).on_hover_text(&r.path);
-                        ui.end_row();
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (i, r) in s.sources.iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(6.0);
                     }
-                });
+                    let mut fields = match r.field {
+                        Field::Progressive => "progressive".to_string(),
+                        Field::Ivtc => "IVTC".to_string(),
+                        Field::Deinterlace => "deinterlace".to_string(),
+                    };
+                    if r.field != Field::Progressive {
+                        fields += match r.order {
+                            Order::Auto => "",
+                            Order::Tff => " (TFF)",
+                            Order::Bff => " (BFF)",
+                        };
+                    }
+                    let matrix = MATRICES.iter().find(|(m, _)| *m == r.matrix).map(|(_, n)| *n).unwrap_or("?");
+                    let offset = if i == 0 {
+                        "reference".to_string()
+                    } else {
+                        let mut t = format!("offset {:+.3} s {:+} f", r.offset_seconds, r.offset_frames);
+                        if !r.episode_offsets.is_empty() {
+                            t += &format!(", own offset for {}", r.episode_offsets.keys().cloned().collect::<Vec<_>>().join(", "));
+                        }
+                        t
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(&r.label).strong().color(theme::TEXT_BRIGHT));
+                        ui.label(RichText::new(format!("{fields} · matrix {} · {offset}", matrix.to_lowercase())).color(theme::TEXT));
+                    });
+                    theme::path_label(ui, &r.path, theme::TEXT_WEAK);
+                }
             });
             ui.end_row();
 
-            ui.label("Frames");
+            key(ui, "Frames");
             ui.label(format!("{} per episode, seed {}", s.frames, s.seed));
             ui.end_row();
 
@@ -1260,17 +1589,17 @@ impl App {
                     skip.push(name.to_string());
                 }
             }
-            ui.label("Skip");
+            key(ui, "Skip");
             ui.label(if skip.is_empty() { weak("nothing".into()) } else { RichText::new(skip.join(", ")) });
             ui.end_row();
 
             if let Some((idx, types)) = &s.frame_type {
-                ui.label("Frame type");
+                key(ui, "Frame type");
                 ui.label(format!("only {types} frames in {}", s.sources.get(*idx).map(|r| r.label.as_str()).unwrap_or("?")));
                 ui.end_row();
             }
 
-            ui.label("Picture");
+            key(ui, "Picture");
             let mut pic = Vec::new();
             if s.stretch_anamorphic {
                 pic.push("stretch anamorphic");
@@ -1278,7 +1607,7 @@ impl App {
             if s.crop_borders {
                 pic.push("crop black borders");
             }
-            ui.label(if pic.is_empty() { weak("as decoded".into()) } else { RichText::new(pic.join(", ")) });
+            ui.label(if pic.is_empty() { weak("unchanged".into()) } else { RichText::new(pic.join(", ")) });
             ui.end_row();
         });
     }
@@ -1287,85 +1616,135 @@ impl App {
 /// Live progress of the running job.
 fn ui_progress(ui: &mut egui::Ui, ctx: &egui::Context, job: &mut Job) {
     ui.horizontal(|ui| {
-        ui.strong(&job.title);
+        ui.label(RichText::new(&job.title).size(15.0).color(theme::TEXT_BRIGHT));
+        theme::busy(ui, "job", job.finished.is_none(), theme::SURFACE);
         let (i, total, ep) = &job.episode;
         if *total > 1 {
-            ui.label(format!("episode {} of {total}  {ep}", i + 1));
+            ui.label(RichText::new(format!("episode {} of {total} · {ep}", i + 1)).color(theme::TEXT_WEAK));
         }
-        ui.label(RichText::new(format!("{:.0}s", job.started.elapsed().as_secs_f64())).weak());
-        ui.spinner();
-        if ui.button("Cancel").clicked() {
-            job.cancel.store(true, Ordering::Relaxed);
-        }
+        let secs = if job.finished.is_some() { job.elapsed as u64 } else { job.started.elapsed().as_secs() };
+        ui.label(RichText::new(format!("{}:{:02}", secs / 60, secs % 60)).color(theme::TEXT_WEAK).monospace());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add_enabled(job.finished.is_none(), egui::Button::new("Cancel")).clicked() {
+                job.cancel.store(true, Ordering::Relaxed);
+            }
+        });
     });
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    ui.add_space(6.0);
+    let full = ui.available_width();
     if job.episode.1 > 1 {
         let done = job.results.len() + job.failed.len();
-        ui.add(egui::ProgressBar::new(done as f32 / job.episode.1 as f32).text(format!("{done}/{} episodes", job.episode.1)));
+        theme::progress(ui, "episodes", done as f32 / job.episode.1 as f32, &format!("Episodes  {done}/{}", job.episode.1), full);
+        ui.add_space(4.0);
     }
-    egui::Grid::new("progress").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
-        for s in &job.sources {
-            ui.label(&s.label);
-            ui.add(
-                egui::ProgressBar::new(s.indexing)
-                    .desired_width(220.0)
-                    .text(if s.indexing >= 1.0 { "indexed".to_string() } else { format!("indexing {:.0}%", s.indexing * 100.0) }),
-            );
-            match s.analysis {
-                Some(a) => ui.add(
-                    egui::ProgressBar::new(a)
-                        .desired_width(220.0)
-                        .text(if a >= 1.0 { "fields analysed".to_string() } else { format!("field analysis {:.0}%", a * 100.0) }),
-                ),
-                None => ui.label(""),
-            };
-            ui.end_row();
-        }
-    });
+    // Per source: indexing, then field analysis for interlaced sources.
+    let col = ((full - 120.0 - 16.0) / 2.0).max(140.0);
+    for s in &job.sources {
+        ui.horizontal(|ui| {
+            // Source name on the same line as the bar labels, so the row reads as one line of text.
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(120.0, 28.0), egui::Sense::hover());
+            let font = egui::FontId::proportional(12.5);
+            let galley = ui.painter().layout(s.label.clone(), font, theme::TEXT_BRIGHT, rect.width() - 8.0);
+            ui.painter_at(rect).galley(rect.left_top(), galley, theme::TEXT_BRIGHT);
+            resp.on_hover_text(&s.label);
+            theme::progress(ui, ("indexing", &s.label), s.indexing, "Indexing", col);
+            ui.add_space(8.0);
+            if let Some(a) = s.analysis {
+                theme::progress(ui, ("analysis", &s.label), a, "Field analysis", col);
+            }
+        });
+    }
     if job.shots.1 > 0 {
-        ui.add(egui::ProgressBar::new(job.shots.0 as f32 / job.shots.1 as f32).text(format!("screenshots {}/{}", job.shots.0, job.shots.1)));
+        ui.add_space(4.0);
+        theme::progress(ui, "shots", job.shots.0 as f32 / job.shots.1 as f32, &format!("Screenshots  {}/{}", job.shots.0, job.shots.1), full);
     }
+    ui.add_space(4.0);
     ui_log(ui, job, "log_running", true);
 }
 
 /// One finished job: outcome, its comparisons (open in the viewer), failures and log.
-/// Returns a comparison folder to open in the viewer when one was clicked.
-fn ui_history_entry(ui: &mut egui::Ui, job: &Job, newest: bool) -> Option<PathBuf> {
+/// Returns the comparison folders to open in the viewer when a button was clicked (the first is shown).
+fn ui_history_entry(ui: &mut egui::Ui, job: &Job, newest: bool) -> Option<Vec<PathBuf>> {
     let mut view = None;
     let (status, color) = match &job.finished {
-        Some(Ok(())) if job.failed.is_empty() => ("done".to_string(), Color32::from_rgb(80, 180, 100)),
-        Some(Ok(())) => (format!("{} failed", job.failed.len()), Color32::from_rgb(220, 170, 60)),
-        _ => ("stopped".to_string(), Color32::from_rgb(220, 80, 80)),
+        Some(Ok(())) if job.failed.is_empty() => ("done".to_string(), theme::OK),
+        Some(Ok(())) => (format!("{} failed", job.failed.len()), theme::WARN),
+        _ => ("stopped".to_string(), theme::ERR),
     };
-    let header = RichText::new(format!("{}  ·  {status}  ·  {:.0}s", job.title, job.elapsed)).color(color);
-    egui::CollapsingHeader::new(header).id_salt(("job", job.started)).default_open(newest).show(ui, |ui| {
+    let id = ui.make_persistent_id(("job", job.started));
+    let secs = job.elapsed as u64;
+    theme::tile().show(ui, |ui| {
+    ui.set_width(ui.available_width());
+    theme::disclosure(ui, id, newest, |ui| {
+        ui.label(RichText::new(&job.title).color(theme::TEXT_BRIGHT));
+        theme::pill(ui, &status, color);
+        ui.label(RichText::new(format!("{}:{:02}", secs / 60, secs % 60)).color(theme::TEXT_WEAK).monospace());
+    },
+    |ui| {
+        ui.add_space(4.0);
         if let Some(Err(e)) = &job.finished {
-            ui.colored_label(Color32::from_rgb(220, 80, 80), format!("Stopped: {e}"));
+            ui.colored_label(theme::ERR, format!("Stopped: {e}"));
+        }
+        if job.results.len() > 1 {
+            let n = job.results.len();
+            if ui
+                .add(theme::primary(format!("Open all {n} in Viewer")))
+                .on_hover_text("Adds every comparison from this run to the Viewer and shows the first")
+                .clicked()
+            {
+                view = Some(job.results.iter().map(|r| r.out_dir.clone()).collect());
+            }
         }
         egui::Grid::new(("results", job.started)).striped(true).show(ui, |ui| {
             for r in &job.results {
                 ui.label(&r.name);
                 ui.label(RichText::new(format!("{} frames", r.frames.len())).weak());
                 if ui.small_button("Open in Viewer").clicked() {
-                    view = Some(r.out_dir.clone());
+                    view = Some(vec![r.out_dir.clone()]);
                 }
                 ui.end_row();
             }
         });
         for (ep, e) in &job.failed {
-            ui.colored_label(Color32::from_rgb(220, 80, 80), format!("{ep}: {e}"));
+            ui.colored_label(theme::ERR, format!("{ep}: {e}"));
         }
+        ui.add_space(4.0);
         ui_log(ui, job, &format!("log{:?}", job.started), false);
     });
+    });
+    ui.add_space(6.0);
     view
 }
 
 fn ui_log(ui: &mut egui::Ui, job: &Job, id: &str, open: bool) {
-    egui::CollapsingHeader::new("Log").id_salt(id).default_open(open).show(ui, |ui| {
-        egui::ScrollArea::vertical().id_salt(id).max_height(260.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
-            for l in &job.log {
-                ui.label(RichText::new(l).monospace().small());
-            }
-        });
-    });
+    let lines = job.log.len();
+    theme::disclosure(
+        ui,
+        egui::Id::new(id),
+        open,
+        |ui| {
+            ui.label(RichText::new("Log").color(theme::TEXT));
+            ui.label(RichText::new(format!("{lines} lines")).small().color(theme::TEXT_WEAK));
+        },
+        |ui| {
+            theme::code_panel().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::ScrollArea::vertical().id_salt(id).max_height(240.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    for l in &job.log {
+                        // Episode headings stand out; failures are red; the rest is quiet.
+                        let col = if l.starts_with("==") {
+                            theme::TEXT_BRIGHT
+                        } else if l.contains("failed") || l.starts_with("stopped") {
+                            theme::ERR
+                        } else {
+                            theme::TEXT_WEAK
+                        };
+                        ui.label(RichText::new(l).font(egui::FontId::monospace(12.0)).color(col));
+                    }
+                });
+            });
+        },
+    );
 }

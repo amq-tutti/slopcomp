@@ -108,7 +108,7 @@ impl Default for Setup {
         Self {
             name: String::new(),
             out_dir: std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join("Pictures").join("Anime Comparisons"))
+                .map(|h| PathBuf::from(h).join("Pictures").join("SlopComp"))
                 .unwrap_or_else(|| PathBuf::from("comps"))
                 .to_string_lossy()
                 .into_owned(),
@@ -330,9 +330,9 @@ impl Setup {
             for part in ps.offset.iter().flat_map(|o| o.split(',')) {
                 let part = part.trim();
                 if let Some(sec) = part.strip_suffix('s') {
-                    r.offset_seconds += sec.parse::<f64>().map_err(|_| format!("bad offset '{part}'"))?;
+                    r.offset_seconds += sec.parse::<f64>().map_err(|_| format!("offset \"{part}\" isn't valid. Use seconds (\"1.5s\") or frames (\"12\")."))?;
                 } else if !part.is_empty() {
-                    r.offset_frames += part.parse::<i32>().map_err(|_| format!("bad offset '{part}'"))?;
+                    r.offset_frames += part.parse::<i32>().map_err(|_| format!("offset \"{part}\" isn't valid. Use seconds (\"1.5s\") or frames (\"12\")."))?;
                 }
             }
             for (ep, o) in &ps.episode_offsets {
@@ -340,9 +340,9 @@ impl Setup {
                 for part in o.split(',') {
                     let part = part.trim();
                     if let Some(sec) = part.strip_suffix('s') {
-                        s += sec.parse::<f64>().map_err(|_| format!("bad offset '{part}'"))?;
+                        s += sec.parse::<f64>().map_err(|_| format!("offset \"{part}\" isn't valid. Use seconds (\"1.5s\") or frames (\"12\")."))?;
                     } else if !part.is_empty() {
-                        f += part.parse::<i32>().map_err(|_| format!("bad offset '{part}'"))?;
+                        f += part.parse::<i32>().map_err(|_| format!("offset \"{part}\" isn't valid. Use seconds (\"1.5s\") or frames (\"12\")."))?;
                     }
                 }
                 r.episode_offsets.insert(ep.clone(), (s, f));
@@ -353,7 +353,7 @@ impl Setup {
                 Some("601") | Some("170m") => Some(6),
                 Some("470bg") | Some("pal") => Some(5),
                 Some("2020") => Some(9),
-                Some(m) => Some(m.parse().map_err(|_| format!("unknown matrix '{m}'"))?),
+                Some(m) => Some(m.parse().map_err(|_| format!("matrix \"{m}\" isn't known. Use 709, 601, 470bg, or 2020."))?),
             };
             s.sources.push(r);
         }

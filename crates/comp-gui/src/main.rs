@@ -1,9 +1,10 @@
-//! Anime Comparisons desktop app.
+//! SlopComp desktop app.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod app;
 mod preview;
 mod setup;
+mod theme;
 mod viewer;
 
 /// Window/taskbar icon (macOS uses the bundle's .icns instead).
@@ -25,14 +26,24 @@ fn main() -> eframe::Result {
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
+    // Developer flags: --dev-storage keeps test runs away from the real saved setup;
+    // --size=WxH opens the window at that size (and doesn't restore or save the window size).
+    let args: Vec<String> = std::env::args().collect();
+    let dev_storage = args.iter().any(|a| a == "--dev-storage");
+    let size = args.iter().find_map(|a| a.strip_prefix("--size=")).and_then(|v| {
+        let (w, h) = v.split_once('x')?;
+        Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
+    });
     let options = eframe::NativeOptions {
         viewport: viewport
-            .with_title("Anime Comparisons")
-            .with_inner_size([1180.0, 820.0])
+            .with_title("SlopComp")
+            .with_inner_size(size.unwrap_or([1180.0, 820.0]))
             .with_min_inner_size([720.0, 520.0])
             .with_drag_and_drop(true),
+        persist_window: size.is_none(),
         ..Default::default()
     };
     // The app id stays "anime-comp" so the saved setup (eframe storage) carries over.
-    eframe::run_native("anime-comp", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
+    let app_id = if dev_storage { "anime-comp-dev" } else { "anime-comp" };
+    eframe::run_native(app_id, options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
 }

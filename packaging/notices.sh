@@ -11,7 +11,7 @@ lic() { if [[ -f "$P/$1/$2" ]]; then cat "$P/$1/$2"; else cat "deps/build/$1/$2"
 {
   echo "# Third-party notices"
   echo
-  echo "Anime Comparisons (anime-comp) is distributed under the GNU General Public License v3 (see LICENSE). It statically links the"
+  echo "SlopComp (anime-comp) is distributed under the GNU General Public License v3 (see LICENSE). It statically links the"
   echo "libraries below. Their licences are reproduced here."
   echo
   echo "## Native libraries"
@@ -41,7 +41,14 @@ lic() { if [[ -f "$P/$1/$2" ]]; then cat "$P/$1/$2"; else cat "deps/build/$1/$2"
   echo
   echo "## Fonts"
   echo
-  echo "IBM Plex Sans, IBM Plex Mono and IBM Plex Sans JP (© IBM Corp., https://github.com/IBM/plex), embedded in"
+  echo "Instrument Sans (© The Instrument Sans Project Authors, https://github.com/Instrument/instrument-sans),"
+  echo "embedded in the desktop app as a static Regular instance, is licensed under the SIL Open Font License 1.1:"
+  echo
+  echo '```'
+  tr -d '\r' < crates/comp-gui/fonts/InstrumentSans-OFL.txt
+  echo '```'
+  echo
+  echo "IBM Plex Mono and IBM Plex Sans JP (© IBM Corp., https://github.com/IBM/plex), embedded in"
   echo "the desktop app, are licensed under the SIL Open Font License 1.1:"
   echo
   echo '```'

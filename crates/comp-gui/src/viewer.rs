@@ -9,6 +9,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use comp_core::comp::CompResult;
 use comp_core::edit::Editor;
+use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, TextureHandle, TextureOptions, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,7 +229,7 @@ impl Viewer {
             replace_with: 0,
             replace_for: None,
             frame_edits: HashMap::new(),
-            show_fix: true,
+            show_fix: false,
         }
     }
 
@@ -320,7 +321,7 @@ impl Viewer {
                         self.frame = k;
                     }
                     self.result = Some(result);
-                    self.message = Some(("Saved (PNG, comp.json and index.html updated)".into(), false));
+                    self.message = Some(("Saved. The screenshot, comp.json, and index.html are updated.".into(), false));
                 }
                 EditRep::Error(e) => self.message = Some((e, true)),
             }
@@ -340,59 +341,79 @@ impl Viewer {
     pub fn ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.pump(ctx);
 
-        // Header: which comparison.
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Open comparison…").on_hover_text("A folder containing comp.json").clicked() {
-                if let Some(d) = rfd::FileDialog::new().pick_folder() {
-                    self.open(&d);
-                }
-            }
-            let name_of = |d: &Path| d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // Header: which comparison (its name, or the list when several are open); Open and Close on the right.
+        ui.horizontal(|ui| {
+            ui.set_min_height(30.0);
             let cur = self.dir.clone();
             let mut open: Option<PathBuf> = None;
             let mut close: Option<PathBuf> = None;
-            if self.list.len() > 1 || (self.list.len() == 1 && cur.is_none()) {
+            let show_list = self.list.len() > 1 || (self.list.len() == 1 && cur.is_none());
+            if show_list {
+                // egui sizes the popup to the button and truncates wider rows, so size the
+                // button for the longest name (plus the close button and scrollbar).
+                let names: Vec<String> = self.list.iter().map(|d| list_name(d)).collect();
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let widest = ui.fonts(|f| {
+                    names.iter().map(|n| f.layout_no_wrap(n.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max)
+                });
                 egui::ComboBox::from_id_salt("viewer_list")
-                    .selected_text(cur.as_deref().map(name_of).unwrap_or(format!("{} open…", self.list.len())))
+                    .width((widest + 72.0).clamp(160.0, 540.0))
+                    .height(420.0)
+                    .selected_text(cur.as_deref().map(list_name).unwrap_or(format!("{} comparisons open", self.list.len())))
                     .show_ui(ui, |ui| {
-                        for d in &self.list {
+                        for (d, name) in self.list.iter().zip(&names) {
+                            // The row opens the comparison; the square × at the end closes it.
                             ui.horizontal(|ui| {
-                                if ui.small_button("×").on_hover_text("Close (files stay on disk)").clicked() {
-                                    close = Some(d.clone());
-                                }
-                                if ui.selectable_label(cur.as_deref() == Some(d.as_path()), name_of(d)).clicked() {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let w = (ui.available_width() - 26.0 - 4.0).max(60.0);
+                                let selected = cur.as_deref() == Some(d.as_path());
+                                if theme::list_row(ui, selected, name, w).on_hover_text(d.display().to_string()).clicked() {
                                     open = Some(d.clone());
+                                }
+                                if theme::icon_button(ui, theme::Icon::Remove, true).on_hover_text("Close (files stay on disk)").clicked() {
+                                    close = Some(d.clone());
                                 }
                             });
                         }
                     })
                     .response
-                    .on_hover_text("Comparisons open in the viewer");
+                    .on_hover_text("Switch between open comparisons");
             }
-            if let Some(c) = &cur {
-                if ui.button("Close").on_hover_text("Close this comparison (files stay on disk)").clicked() {
-                    close = Some(c.clone());
+            // With several open, the list button already names the current one.
+            if let Some(r) = self.result.as_ref().filter(|_| !show_list) {
+                ui.label(RichText::new(&r.name).size(16.0).color(theme::TEXT_BRIGHT));
+            }
+            theme::busy(ui, "viewer", self.busy, theme::BG);
+            if let Some((m, err)) = &self.message {
+                ui.colored_label(if *err { crate::theme::ERR } else { ui.visuals().weak_text_color() }, m);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(c) = &cur {
+                    if ui.button("Close").on_hover_text("Close this comparison (files stay on disk)").clicked() {
+                        close = Some(c.clone());
+                    }
                 }
-            }
+                if ui.button("Open comparison…").on_hover_text("A folder containing comp.json").clicked() {
+                    if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                        open = Some(d);
+                    }
+                }
+            });
             if let Some(d) = close {
                 self.close(&d);
             } else if let Some(d) = open {
                 self.open(&d);
             }
-            if let Some(r) = &self.result {
-                ui.label(RichText::new(&r.name).strong());
-            }
-            if self.busy {
-                ui.spinner();
-            }
-            if let Some((m, err)) = &self.message {
-                ui.colored_label(if *err { Color32::from_rgb(220, 80, 80) } else { ui.visuals().weak_text_color() }, m);
-            }
         });
+        ui.add_space(4.0);
         let Some(result) = self.result.clone() else {
             if !self.busy {
-                ui.add_space(20.0);
-                ui.label("Open a comparison folder, or create one in 3  Create and press \"Open in Viewer\".");
+                ui.add_space(40.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new("No comparison open").size(17.0).color(theme::TEXT_BRIGHT));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Open a comparison folder, or create a new comparison in step 3, Create.").color(theme::TEXT_WEAK));
+                });
             }
             return;
         };
@@ -408,19 +429,31 @@ impl Viewer {
         self.right = self.right.min(n_src - 1);
 
         // Toolbar.
+        theme::toolbar().show(ui, |ui| {
+        ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
-            for (m, name, key) in [(Mode::Grid, "Side by side", "G"), (Mode::Slider, "Slider", "S"), (Mode::Flicker, "Flicker", "F")] {
-                if ui.selectable_label(self.mode == m, name).on_hover_text(format!("Key {key}")).clicked() {
-                    self.mode = m;
-                }
+            let modes: [(Mode, &str, &str, &[&str]); 3] = [
+                (Mode::Grid, "Side by side", "All sources at once", &["G"]),
+                (Mode::Slider, "Slider", "Two sources, split by a line you drag", &["S"]),
+                (Mode::Flicker, "Flicker", "One source at a time", &["F"]),
+            ];
+            let sel = modes.iter().position(|(m, ..)| *m == self.mode).unwrap_or(0);
+            let opts: Vec<(&str, &str, &[&str])> = modes.iter().map(|(_, n, h, k)| (*n, *h, *k)).collect();
+            if let Some(i) = theme::segmented(ui, "viewer_mode", &opts, sel) {
+                self.mode = modes[i].0;
             }
-            ui.separator();
+            if self.mode != Mode::Grid {
+                theme::vsep(ui);
+            }
             match self.mode {
                 Mode::Flicker => {
-                    for (i, s) in result.sources.iter().enumerate() {
-                        if ui.selectable_label(self.flick == i, format!("{} {}", i + 1, s.label)).clicked() {
-                            self.flick = i;
-                        }
+                    let names: Vec<String> = result.sources.iter().enumerate().map(|(i, s)| format!("{} {}", i + 1, s.label)).collect();
+                    let keys: Vec<[String; 1]> = (1..=names.len()).map(|k| [k.to_string()]).collect();
+                    let key_refs: Vec<[&str; 1]> = keys.iter().map(|k| [k[0].as_str()]).collect();
+                    let opts: Vec<(&str, &str, &[&str])> =
+                        names.iter().zip(&key_refs).map(|(n, k)| (n.as_str(), "Show this source", &k[..])).collect();
+                    if let Some(i) = theme::segmented(ui, "viewer_flicker_source", &opts, self.flick) {
+                        self.flick = i;
                     }
                 }
                 Mode::Slider => {
@@ -435,17 +468,24 @@ impl Viewer {
                 }
                 Mode::Grid => {}
             }
-            ui.separator();
-            if ui.button("Fit").on_hover_text("Key 0").clicked() {
+            theme::vsep(ui);
+            if theme::key_hint(ui.button("Fit"), "Fit the frame to the window", &["0"]).clicked() {
                 self.reset_zoom();
             }
-            ui.label(RichText::new(format!("{:.0}%", self.scale * 100.0)).weak()).on_hover_text("Zoom relative to fit");
-            ui.separator();
+            ui.label(RichText::new(format!("{:.0}%", self.scale * 100.0)).monospace().color(theme::TEXT_WEAK)).on_hover_text("Zoom (100% fits the window). Scroll to zoom, drag to pan.");
+            theme::vsep(ui);
             let rf = result.frames[self.frame];
             let t = result.sources[0].shots[self.frame].reference_time;
-            ui.label(format!("frame {}/{} · ref #{rf} · {}:{:06.3}", self.frame + 1, n_frames, (t / 60.0) as i64, t % 60.0));
-            ui.toggle_value(&mut self.show_fix, "Adjust frames");
+            let r = ui.label(RichText::new(format!("Frame {} of {}", self.frame + 1, n_frames)).color(theme::TEXT_BRIGHT));
+            theme::key_hint(r, "Previous or next frame", &["←", "→"]);
+            ui.label(RichText::new(format!("reference #{rf} · {}:{:06.3}", (t / 60.0) as i64, t % 60.0)).color(theme::TEXT_WEAK))
+                .on_hover_text("Frame number and time in the reference source");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.toggle_value(&mut self.show_fix, "Adjust frames").on_hover_cursor(egui::CursorIcon::PointingHand);
+            });
         });
+        });
+        ui.add_space(6.0);
 
         // Keyboard (unless a text field has focus).
         if !ctx.wants_keyboard_input() {
@@ -470,6 +510,8 @@ impl Viewer {
                 for (idx, k) in digits.iter().enumerate() {
                     if i.key_pressed(*k) && idx < n_src {
                         match self.mode {
+                            // Slider: a digit puts that source on the right, Shift + digit on the left.
+                            Mode::Slider if i.modifiers.shift => self.left = idx,
                             Mode::Slider => self.right = idx,
                             _ => {
                                 self.mode = Mode::Flicker;
@@ -478,8 +520,8 @@ impl Viewer {
                         }
                     }
                 }
-                if i.key_pressed(egui::Key::Space) {
-                    self.mode = Mode::Flicker;
+                // Space steps through sources only while flickering; it doesn't switch modes.
+                if i.key_pressed(egui::Key::Space) && self.mode == Mode::Flicker {
                     self.flick = (self.flick + 1) % n_src;
                 }
                 if i.key_pressed(egui::Key::G) {
@@ -500,18 +542,23 @@ impl Viewer {
         // Adjust panel (right).
         if self.show_fix {
             egui::SidePanel::right("viewer_fix").resizable(false).default_width(250.0).show_inside(ui, |ui| {
-                self.ui_fix(ui, &result);
+                // Scrolls when the window is too short for the whole panel.
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.ui_fix(ui, &result));
             });
         }
 
         // Thumbnail strip (bottom).
         egui::TopBottomPanel::bottom("viewer_strip").resizable(false).show_inside(ui, |ui| {
+            // Solid scrollbar in its own row below the thumbnails; egui's default floating bar
+            // is drawn over them and hides the frame numbers when hovered.
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for k in 0..n_frames {
                         let file = result.sources[0].shots[k].file.clone();
                         let size = Vec2::new(120.0, 68.0);
                         let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         let painter = ui.painter_at(rect);
                         painter.rect_filled(rect, 3.0, Color32::BLACK);
                         if let Some(tex) = self.texture(&file, true) {
@@ -525,7 +572,9 @@ impl Viewer {
                         painter.rect_filled(pill, 4.0, Color32::from_black_alpha(180));
                         painter.galley(pill.min + pad, galley, Color32::WHITE);
                         if k == self.frame {
-                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(2.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside);
+                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                        } else if resp.hovered() {
+                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, theme::TEXT_WEAK), egui::StrokeKind::Inside);
                         }
                         if resp.clicked() {
                             self.frame = k;
@@ -709,13 +758,13 @@ impl Viewer {
     fn ui_fix(&mut self, ui: &mut egui::Ui, result: &CompResult) {
         let k = self.frame;
         let rf = result.frames[k];
-        ui.heading("Adjust frame");
-        ui.label(RichText::new(format!("Comparison frame {} (ref #{rf})", k + 1)).weak());
+        theme::section(ui, "Adjust frame");
+        ui.label(RichText::new(format!("Frame {} · reference #{rf}", k + 1)).weak());
         ui.add_space(6.0);
         let busy = self.busy;
         for (s, src) in result.sources.iter().enumerate() {
             let cur = src.shots[k].source_frame;
-            ui.group(|ui| {
+            theme::tile().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&src.label).strong());
@@ -751,18 +800,19 @@ impl Viewer {
                     });
                 });
                 if s == 0 {
-                    ui.label(RichText::new("Moving the reference only changes its own shot.").small().weak());
+                    ui.label(RichText::new("The other sources don't follow when you move the reference.").small().weak());
                 }
             });
         }
-        ui.add_space(10.0);
-        ui.separator();
-        ui.label(RichText::new("Replace this frame").strong());
-        ui.label(RichText::new("Swap it for a different moment: new shots for every source, aligned like the original run.").small().weak());
+        ui.add_space(18.0);
+        theme::section(ui, "Replace frame");
+        ui.label(RichText::new("Pick a different moment. Every source gets a new screenshot, aligned with the same offsets.").small().weak());
+        ui.add_space(4.0);
+        let full = egui::vec2(ui.available_width(), 28.0);
         ui.add_enabled_ui(!busy, |ui| {
             if ui
-                .button("Random nearby frame")
-                .on_hover_text("Pick a random frame between the neighbouring comparison frames")
+                .add_sized(full, egui::Button::new("Random nearby frame"))
+                .on_hover_text("Pick a random moment between this frame's neighbours")
                 .clicked()
             {
                 self.busy = true;
@@ -773,13 +823,13 @@ impl Viewer {
                     self.replace_for = Some(rf);
                     self.replace_with = rf;
                 }
-                ui.label("Replace with ref");
+                ui.label("Reference frame");
                 ui.add(egui::DragValue::new(&mut self.replace_with).speed(1.0).prefix("#"))
-                    .on_hover_text("Reference frame number to use instead (the number in the file names)");
+                    .on_hover_text("Frame number in the reference source (the number in the file names)");
                 let changed = self.replace_with != rf;
                 if ui
-                    .add_enabled(changed, egui::Button::new("Replace"))
-                    .on_hover_text("Replace this comparison frame with the reference frame entered on the left")
+                    .add_enabled(changed, egui::Button::new("Use it"))
+                    .on_hover_text("Replace this frame with the reference frame number on the left")
                     .clicked()
                 {
                     self.busy = true;
@@ -788,27 +838,36 @@ impl Viewer {
             });
         });
 
-        ui.add_space(14.0);
-        ui.separator();
-        ui.heading("Comparison");
+        ui.add_space(18.0);
+        theme::section(ui, "Comparison");
         ui.label(RichText::new("Applies to the whole comparison.").small().weak());
         ui.add_space(4.0);
         if let Some(d) = &self.dir {
-            if ui.button("Open HTML viewer").clicked() {
+            if ui.add_sized(full, egui::Button::new("Open HTML viewer")).clicked() {
                 crate::app::open_external(&d.join("index.html"));
             }
-            if ui.button("Show folder").clicked() {
+            if ui.add_sized(full, egui::Button::new("Show folder")).clicked() {
                 crate::app::open_external(d);
             }
             if ui
-                .button("Upload to slow.pics manually…")
-                .on_hover_text("Opens this folder and slow.pics' upload page. Drag the PNGs in; names sort frame by frame.")
+                .add_sized(full, egui::Button::new("Upload to slow.pics manually…"))
+                .on_hover_text("Opens this folder and the slow.pics upload page. Drag all the PNGs in; their names keep the frames in order.")
                 .clicked()
             {
                 crate::app::open_external(d);
                 crate::app::open_url("https://slow.pics/comparison");
             }
         }
+    }
+}
+
+/// Name for the list of open comparisons. Season jobs put each episode in a folder named just
+/// "E01", so those get the series folder in front ("To Heart · E01").
+fn list_name(dir: &Path) -> String {
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    match dir.parent().and_then(|p| p.file_name()) {
+        Some(parent) if comp_core::pairing::parse_episode(&name).is_some_and(|e| e.to_string() == name) => format!("{} · {name}", parent.to_string_lossy()),
+        _ => name,
     }
 }
 
