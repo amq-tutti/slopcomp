@@ -51,7 +51,7 @@ jobs:
           security import $RUNNER_TEMP/cert.p12 -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC"
           security list-keychains -d user -s "$KC"
-          APP="target/release/Anime Comparisons.app"
+          APP="target/release/SlopComp.app"
           for bin in "$APP/Contents/MacOS/comp" "$APP/Contents/MacOS/anime-comp"; do
             codesign --force --options runtime --timestamp -s "$MACOS_SIGN_IDENTITY" "$bin"
           done
@@ -65,9 +65,9 @@ jobs:
         run: |
           VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           STAGE=$(mktemp -d)
-          cp -R "target/release/Anime Comparisons.app" LICENSE THIRD_PARTY_NOTICES.md "$STAGE/"
+          cp -R "target/release/SlopComp.app" LICENSE THIRD_PARTY_NOTICES.md "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "Anime Comparisons" -srcfolder "$STAGE" -ov -format UDZO "target/release/Anime-Comparisons-$VERSION-macos-arm64.dmg"
+          hdiutil create -volname "SlopComp" -srcfolder "$STAGE" -ov -format UDZO "target/release/SlopComp-$VERSION-macos-arm64.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: macos

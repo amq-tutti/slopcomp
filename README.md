@@ -1,4 +1,4 @@
-# Anime Comparisons
+# SlopComp
 
 Frame-exact anime source comparisons (WEB-DL vs BD vs encodes vs DVD), with lossless PNG screenshots and slow.pics upload.
 Native Rust app with statically linked ffmpeg/ffms2/zimg. See [PLAN.md](PLAN.md) for the architecture and roadmap.
@@ -16,7 +16,7 @@ On Windows, build inside MSYS2 UCRT64 (see `.github/workflows/ci.yml`).
 ## Desktop app
 
 ```bash
-cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → "target/release/Anime Comparisons.app"
+cargo run --release -p comp-gui          # or: packaging/macos/bundle.sh → "target/release/SlopComp.app"
 ```
 
 Three steps: **1 Select** (drop files or episode folders onto the window, pick episodes and settings), **2 Sync** (line the sources up: offsets, flicker), **3 Create** (review the setup, create the comparison, follow progress and history). **Viewer** shows finished comparisons, including older ones, and is where you adjust frames and upload to slow.pics.
@@ -26,7 +26,7 @@ move a source ±1 frame or to an exact frame, or replace the frame. The PNGs, `c
 ## Packaging
 
 ```bash
-packaging/macos/bundle.sh --dmg      # macOS: "target/release/Anime Comparisons.app" + .dmg
+packaging/macos/bundle.sh --dmg      # macOS: "target/release/SlopComp.app" + .dmg
 packaging/linux/docker-build.sh      # Linux AppImage + CLI tarball in manylinux_2_28 (Docker) → target/linux/
 packaging/windows/package.sh         # Windows (MSYS2 UCRT64): zip, fails on non-system DLL imports
 packaging/notices.sh                 # regenerate THIRD_PARTY_NOTICES.md

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds "target/release/Anime Comparisons.app" (and the comp CLI inside it) for the host architecture.
+# Builds "target/release/SlopComp.app" (and the comp CLI inside it) for the host architecture.
 # Usage: packaging/macos/bundle.sh [--dmg]
 # Unsigned: on first launch, right-click → Open (or sign/notarize for distribution, see PLAN M7).
 set -euo pipefail
@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 cargo build --release -p comp-gui -p comp-cli
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-APP="target/release/Anime Comparisons.app"
+APP="target/release/SlopComp.app"
 rm -rf "$APP" target/release/anime-comp.app
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/release/anime-comp "$APP/Contents/MacOS/anime-comp"
@@ -18,8 +18,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Anime Comparisons</string>
-  <key>CFBundleDisplayName</key><string>Anime Comparisons</string>
+  <key>CFBundleName</key><string>SlopComp</string>
+  <key>CFBundleDisplayName</key><string>SlopComp</string>
   <key>CFBundleIdentifier</key><string>io.github.amq-tutti.slopcomp</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -31,7 +31,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
-      <key>CFBundleTypeName</key><string>Anime Comparisons project</string>
+      <key>CFBundleTypeName</key><string>SlopComp project</string>
       <key>CFBundleTypeExtensions</key><array><string>toml</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
       <key>LSHandlerRank</key><string>Alternate</string>
@@ -47,13 +47,13 @@ echo "built $APP ($(du -sh "$APP" | cut -f1))"
 # Disk image with an Applications shortcut.
 if [[ "${1:-}" == "--dmg" ]]; then
   ARCH=$(uname -m)
-  DMG="target/release/Anime-Comparisons-${VERSION}-macos-${ARCH}.dmg"
+  DMG="target/release/SlopComp-${VERSION}-macos-${ARCH}.dmg"
   STAGE=$(mktemp -d)
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
   cp LICENSE THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
   rm -f "$DMG"
-  hdiutil create -volname "Anime Comparisons" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+  hdiutil create -volname "SlopComp" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   rm -rf "$STAGE"
   echo "built $DMG ($(du -h "$DMG" | cut -f1))"
 fi

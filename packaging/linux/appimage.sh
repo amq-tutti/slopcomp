@@ -22,7 +22,7 @@ cp packaging/icon/icon_256.png "$APPDIR/anime-comp.png"
 cat > "$APPDIR/anime-comp.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=Anime Comparisons
+Name=SlopComp
 Comment=Frame-exact anime source comparisons
 Exec=anime-comp %f
 Icon=anime-comp
@@ -45,7 +45,7 @@ if [[ ! -x "$TOOL" ]]; then
   curl -fsSL -o "$TOOL" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
   chmod +x "$TOOL"
 fi
-OUT="$REL/Anime-Comparisons-$VERSION-linux-$ARCH.AppImage"
+OUT="$REL/SlopComp-$VERSION-linux-$ARCH.AppImage"
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$ARCH "$TOOL" --no-appstream "$APPDIR" "$OUT" >/dev/null
 tar -C "$REL" -czf "$REL/comp-$VERSION-linux-$ARCH.tar.gz" comp
 echo "built $OUT ($(du -h "$OUT" | cut -f1))"
