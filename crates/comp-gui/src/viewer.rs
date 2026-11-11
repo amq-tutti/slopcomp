@@ -536,22 +536,13 @@ impl Viewer {
                 if i.key_pressed(egui::Key::ArrowLeft) {
                     self.frame = self.frame.saturating_sub(1);
                 }
-                let digits = [
-                    egui::Key::Num1,
-                    egui::Key::Num2,
-                    egui::Key::Num3,
-                    egui::Key::Num4,
-                    egui::Key::Num5,
-                    egui::Key::Num6,
-                    egui::Key::Num7,
-                    egui::Key::Num8,
-                    egui::Key::Num9,
-                ];
-                for (idx, k) in digits.iter().enumerate() {
-                    if i.key_pressed(*k) && idx < n_src {
+                // Digit keys by physical key: with Shift held, the top-row keys arrive as "!", "@"…
+                // on many layouts, so the logical key alone misses them (the numpad never did).
+                for (idx, shift) in theme::digit_presses(i) {
+                    if idx < n_src {
                         match self.mode {
                             // Slider: a digit puts that source on the right, Shift + digit on the left.
-                            Mode::Slider if i.modifiers.shift => self.left = idx,
+                            Mode::Slider if shift => self.left = idx,
                             Mode::Slider => self.right = idx,
                             _ => {
                                 self.mode = Mode::Flicker;

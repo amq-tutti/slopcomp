@@ -974,7 +974,9 @@ impl App {
                 ui.horizontal(|ui| {
                     theme::checkbox(ui, &mut s.skip_black, "Black screens");
                     if s.skip_black {
-                        ui.add(egui::Slider::new(&mut s.black_threshold, 0.01..=0.25).text("threshold"))
+                        ui
+                            .add(egui::Slider::new(&mut s.black_threshold, 0.01..=0.25).text("threshold"))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .on_hover_text("Frames darker than this are skipped. Raise it to skip dark scenes too.");
                     }
                 });
@@ -1146,7 +1148,7 @@ impl App {
         }
         let w = (ui.available_width() - 8.0).max(80.0);
         ui.spacing_mut().slider_width = w;
-        ui.add(egui::Slider::new(&mut self.sync.frame, 0..=n - 1).show_value(false));
+        ui.add(egui::Slider::new(&mut self.sync.frame, 0..=n - 1).show_value(false)).on_hover_cursor(egui::CursorIcon::PointingHand);
         w
     }
 
@@ -1397,8 +1399,9 @@ impl App {
                 if i.key_pressed(egui::Key::ArrowLeft) {
                     self.sync.frame = (self.sync.frame - 1).max(0);
                 }
-                for (k, idx) in [(egui::Key::Num1, 0), (egui::Key::Num2, 1), (egui::Key::Num3, 2), (egui::Key::Num4, 3), (egui::Key::Num5, 4)] {
-                    if i.key_pressed(k) && idx < self.setup.sources.len() && self.sync.flicker.is_some() {
+                // By physical key, so layouts where digits need Shift work too.
+                for (idx, _) in theme::digit_presses(i) {
+                    if idx < 5 && idx < self.setup.sources.len() && self.sync.flicker.is_some() {
                         self.sync.flicker = Some(idx);
                     }
                 }

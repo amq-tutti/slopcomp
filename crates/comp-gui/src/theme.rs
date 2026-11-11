@@ -54,7 +54,7 @@ pub fn apply(ctx: &egui::Context) {
         sp.button_padding = Vec2::new(11.0, 5.0);
         sp.interact_size = Vec2::new(40.0, 26.0);
         sp.indent = 16.0;
-        sp.menu_margin = Margin::same(8);
+        sp.menu_margin = Margin::same(5); // tooltips and dropdowns: the same snug padding on every side
         sp.window_margin = Margin::same(10);
         sp.combo_width = 120.0;
 
@@ -285,9 +285,13 @@ pub fn busy(ui: &mut Ui, id_salt: impl std::hash::Hash, active: bool, bg: Color3
         // eases back to the logo's resting overlap as it fades.
         let breathe = (time * 3.2).sin() * 0.5 + 0.5;
         let sep = 4.0 + 5.0 * breathe * t;
+        // Snap both squares to whole screen pixels: at fractional positions the anti-aliased edges
+        // change from frame to frame and the gap seems to change width as they move.
+        let ppp = ui.ctx().pixels_per_point();
+        let snap = |v: f32| (v * ppp).round() / ppp;
         let c = rect.center();
-        let back = Rect::from_center_size(Pos2::new(c.x - sep / 2.0, c.y), Vec2::splat(size));
-        let front = Rect::from_center_size(Pos2::new(c.x + sep / 2.0, c.y), Vec2::splat(size));
+        let back = Rect::from_min_size(Pos2::new(snap(c.x - sep / 2.0 - size / 2.0), snap(c.y - size / 2.0)), Vec2::splat(size));
+        let front = Rect::from_min_size(Pos2::new(snap(c.x + sep / 2.0 - size / 2.0), back.top()), Vec2::splat(size));
         // The pink square sits on the violet one with a thin gap that follows its rounded corners
         // (a ring in the background colour). Both at full accent brightness: a darker pink made its
         // square look smaller than the violet one, though they are the same size.
@@ -585,13 +589,11 @@ fn keyboard_icon(ui: &mut Ui) {
 /// One key drawn as a keycap.
 pub fn keycap(ui: &mut Ui, key: &str) {
     let galley = ui.painter().layout_no_wrap(key.to_string(), FontId::proportional(12.0), TEXT_BRIGHT);
-    let size = Vec2::new((galley.size().x + 10.0).max(20.0), 20.0);
+    let size = Vec2::new((galley.size().x + 10.0).max(18.0), 18.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 4.0, SURFACE_3);
     p.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(0x45, 0x49, 0x57)), egui::StrokeKind::Inside);
-    // A slightly darker bottom edge makes it read as a key.
-    p.line_segment([rect.left_bottom() + Vec2::new(3.0, -0.5), rect.right_bottom() + Vec2::new(-3.0, -0.5)], Stroke::new(1.0, BAR));
     p.galley(rect.center() - galley.size() / 2.0, galley, TEXT_BRIGHT);
 }
 
@@ -715,7 +717,10 @@ pub fn shortcuts_button(ui: &mut Ui, groups: &[ShortcutGroup]) {
 pub fn pointer_cursor_for_clickables(ctx: &egui::Context) {
     let Some(pos) = ctx.pointer_hover_pos() else { return };
     let Some(w) = ctx.viewport(|v| v.hits.click) else { return };
-    let clickable = w.enabled && w.sense.senses_click() && !w.sense.senses_drag();
+    // A popup's background counts as clickable in egui (its "move" widget); the text and keycaps
+    // drawn on it aren't, so it shouldn't get the hand.
+    let area_background = w.id == w.layer_id.id.with("move");
+    let clickable = w.enabled && w.sense.senses_click() && !w.sense.senses_drag() && !area_background;
     if clickable && w.interact_rect.contains(pos) && ctx.output(|o| o.cursor_icon) == egui::CursorIcon::Default {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -739,4 +744,20 @@ pub fn list_row(ui: &mut Ui, selected: bool, text: &str, width: f32) -> Response
         p.with_clip_rect(clip).galley_with_override_text_color(Pos2::new(clip.left(), rect.center().y - galley.size().y / 2.0), galley, col);
     }
     resp
+}
+
+/// Digit keys 1–9 pressed this frame, as (index 0–8, Shift held). Matches the physical key as well
+/// as the logical one, so Shift + a top-row digit counts even where it types "!" or "@".
+pub fn digit_presses(i: &egui::InputState) -> Vec<(usize, bool)> {
+    use egui::Key::*;
+    let digit = |k: egui::Key| [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9].iter().position(|d| *d == k);
+    i.events
+        .iter()
+        .filter_map(|e| match e {
+            egui::Event::Key { key, physical_key, pressed: true, repeat: false, modifiers } => {
+                physical_key.and_then(digit).or_else(|| digit(*key)).map(|idx| (idx, modifiers.shift))
+            }
+            _ => None,
+        })
+        .collect()
 }
