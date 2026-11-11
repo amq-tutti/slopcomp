@@ -742,8 +742,8 @@ impl Printer {
                     eprintln!("  field analysis {:<12} {pct:>3}%", labels[source]);
                 }
             }
-            Event::Opened { source, info } => eprintln!(
-                "  opened   {:<12} {}x{} {}-bit, {} frames @ {}/{}, sar {}:{}, {} ({:?} seek)",
+            Event::Opened { source, info, vfr } => eprintln!(
+                "  opened   {:<12} {}x{} {}-bit, {} frames @ {}/{} {}, sar {}:{}, {} ({:?} seek)",
                 labels[source],
                 info.width,
                 info.height,
@@ -751,6 +751,7 @@ impl Printer {
                 info.num_frames,
                 info.fps_num,
                 info.fps_den,
+                if vfr { "VFR" } else { "CFR" },
                 info.sar.0,
                 info.sar.1,
                 info.container,

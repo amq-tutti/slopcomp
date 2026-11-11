@@ -345,7 +345,7 @@ impl App {
                             run.sources[source].indexing = 1.0;
                             run.sources[source].analysis = Some(done as f32 / total as f32);
                         }
-                        Event::Opened { source, info } => {
+                        Event::Opened { source, info, vfr } => {
                             let s = &mut run.sources[source];
                             s.opened = true;
                             s.indexing = 1.0;
@@ -353,8 +353,19 @@ impl App {
                                 *a = 1.0;
                             }
                             run.log.push(format!(
-                                "{}: {}×{} {}-bit, {} frames, {}",
-                                s.label, info.width, info.height, info.layout.bit_depth, info.num_frames, info.container
+                                "{}: {}×{} {}-bit, {}, {} frames, {}",
+                                s.label,
+                                info.width,
+                                info.height,
+                                info.layout.bit_depth,
+                                // With variable frame rate the stream's rate is only an average.
+                                if vfr {
+                                    format!("VFR (avg {} fps)", fps_text(info.fps_num, info.fps_den))
+                                } else {
+                                    format!("{} fps CFR", fps_text(info.fps_num, info.fps_den))
+                                },
+                                info.num_frames,
+                                info.container
                             ));
                         }
                         Event::Excluded { ranges } => {
@@ -417,6 +428,15 @@ fn install_fonts(ctx: &egui::Context) {
     mono.insert(0, "plex-mono".to_owned());
     mono.insert(1, "plex-sans-jp".to_owned());
     ctx.set_fonts(fonts);
+}
+
+/// Frame rate for display: "23.976", "25", "29.97" (up to three decimals, trailing zeros dropped).
+fn fps_text(num: i32, den: i32) -> String {
+    if num <= 0 || den <= 0 {
+        return "?".into();
+    }
+    let s = format!("{:.3}", num as f64 / den as f64);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// Keyboard shortcuts by screen and view mode, for the "?" list in the top bar. The current screen's

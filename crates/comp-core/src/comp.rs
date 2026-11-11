@@ -133,7 +133,8 @@ pub enum Event {
     Indexing { source: usize, done: i64, total: i64 },
     /// Field-processing analysis pass (IVTC / deinterlace), once per file and then cached.
     Analyzing { source: usize, done: i64, total: i64 },
-    Opened { source: usize, info: VideoInfo },
+    /// `vfr`: frame durations vary (see [`is_vfr`]); `info.fps_*` is then the stream's nominal rate.
+    Opened { source: usize, info: VideoInfo, vfr: bool },
     /// Black borders detected (or set) for a source; all-zero means no crop.
     Cropped { source: usize, crop: crate::crop::Crop },
     FramesPicked { frames: Vec<i32>, usable: (i32, i32) },
@@ -286,7 +287,7 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
                         }
                     };
                     let mut vs = vs;
-                    on_event(Event::Opened { source: i, info: vs.info().clone() });
+                    on_event(Event::Opened { source: i, info: vs.info().clone(), vfr: is_vfr(vs.times()) });
                     let crop = match (src.crop, src.auto_crop) {
                         (Some(c), _) => c,
                         (None, true) => {
