@@ -128,8 +128,9 @@ jobs:
       - name: Build
         run: cargo build --workspace --release
 
+      # --no-fail-fast: run every test binary even after one fails, so a run shows all failures.
       - name: Test (frame accuracy, colour conversion)
-        run: cargo test --workspace --release
+        run: cargo test --workspace --release --no-fail-fast
 
       - name: CLI smoke test
         run: |

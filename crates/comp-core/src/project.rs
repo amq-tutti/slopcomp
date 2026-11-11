@@ -138,6 +138,12 @@ impl Project {
 mod tests {
     use super::*;
 
+    // An absolute path on this platform (on Windows, "/abs/…" has no drive, so it's relative).
+    #[cfg(windows)]
+    const ABS: &str = "C:/abs/dvd.mkv";
+    #[cfg(not(windows))]
+    const ABS: &str = "/abs/dvd.mkv";
+
     #[test]
     fn roundtrip_and_relative_paths() {
         let dir = std::env::temp_dir().join("anime-comp-project-test");
@@ -145,7 +151,8 @@ mod tests {
         let file = dir.join("p.toml");
         std::fs::write(
             &file,
-            r#"
+            format!(
+                r#"
 name = "Test"
 frames = 12
 seed = 7
@@ -157,16 +164,17 @@ ivtc = "tff"
 
 [[source]]
 label = "DVD"
-path = "/abs/dvd.mkv"
+path = "{ABS}"
 offset = "-0.5s,2"
 matrix = "601"
-"#,
+"#
+            ),
         )
         .unwrap();
         let p = Project::load(&file).unwrap();
         assert_eq!(p.frames, 12);
         assert_eq!(p.sources[0].path, dir.join("bd"));
-        assert_eq!(p.sources[1].path, PathBuf::from("/abs/dvd.mkv"));
+        assert_eq!(p.sources[1].path, PathBuf::from(ABS));
         assert_eq!(p.out, dir.join("comps"));
         assert_eq!(p.rules, Rules::default());
         p.save(&dir.join("p2.toml")).unwrap();
