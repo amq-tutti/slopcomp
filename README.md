@@ -91,7 +91,13 @@ Setups can be saved as TOML projects, which the command-line tool can run too
 
 ## Command line
 
-The `comp` tool ships next to the app (and on its own in the Linux `.tar.gz`).
+Every download includes the `comp` command-line tool:
+
+- **Windows:** `comp.exe`, next to `SlopComp.exe` in the zip.
+- **macOS:** inside the app, at `SlopComp.app/Contents/MacOS/comp`. To run it as `comp` from any
+  terminal: `ln -s /Applications/SlopComp.app/Contents/MacOS/comp /usr/local/bin/comp`.
+- **Linux:** on its own in `comp-<version>-linux-x86_64.tar.gz`, or through the AppImage:
+  `./SlopComp-<version>-linux-x86_64.AppImage comp …`.
 
 ```bash
 comp info <files…>
