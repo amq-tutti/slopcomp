@@ -102,7 +102,17 @@ fn link(prefix: &PathBuf, target_os: &str) {
 fn bindings(prefix: &PathBuf) {
     let include = prefix.join("include");
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default();
+    // MinGW: parse as the GCC-compatible MinGW target. With libclang 23 from MSYS2, __GNUC__ ended up
+    // undefined, so MinGW's headers took their MSVC branch (`__declspec(noreturn)` after the
+    // declarator) and failed to parse.
+    let target = env::var("TARGET").unwrap();
+    if target.ends_with("windows-gnu") {
+        builder = builder
+            .clang_arg(format!("--target={}", target.replace("-pc-", "-w64-")))
+            .clang_arg("-fgnuc-version=4.2.1");
+    }
+    builder
         .header("wrapper.h")
         .clang_arg(format!("-I{}", include.display()))
         .clang_arg("-DFFMS_STATIC")
