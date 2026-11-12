@@ -583,6 +583,12 @@ impl Viewer {
             // Solid scrollbar in its own row below the thumbnails; egui's default floating bar
             // is drawn over them and hides the frame numbers when hovered.
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            // The handle takes its colour from the widget visuals, where idle and hover are only a
+            // shade apart. Make hover and drag clearly lighter (nothing else in the strip uses them).
+            let wv = &mut ui.visuals_mut().widgets;
+            wv.inactive.bg_fill = theme::SURFACE_3;
+            wv.hovered.bg_fill = theme::TEXT_WEAK;
+            wv.active.bg_fill = theme::ACCENT;
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for k in 0..n_frames {
@@ -591,10 +597,16 @@ impl Viewer {
                         let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
                         let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         let painter = ui.painter_at(rect);
-                        painter.rect_filled(rect, 3.0, Color32::BLACK);
+                        // One corner radius for the background, the image and the hover/selection
+                        // border, so the image's corners don't poke out past the rounded border.
+                        const R: f32 = 4.0;
+                        painter.rect_filled(rect, R, Color32::BLACK);
                         if let Some(tex) = self.texture(&file, true) {
                             let fit = fit_rect(rect, tex.size_vec2());
-                            painter.image(tex.id(), fit, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                            painter.add(
+                                egui::epaint::RectShape::filled(fit, R, Color32::WHITE)
+                                    .with_texture(tex.id(), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0))),
+                            );
                         }
                         // Frame number on a dark pill so it reads on light thumbnails too.
                         let galley = painter.layout_no_wrap(result.frames[k].to_string(), egui::FontId::proportional(11.0), Color32::WHITE);
@@ -602,13 +614,15 @@ impl Viewer {
                         let pill = Rect::from_min_size(rect.right_bottom() - galley.size() - pad * 2.0 - Vec2::new(4.0, 4.0), galley.size() + pad * 2.0);
                         painter.rect_filled(pill, 4.0, Color32::from_black_alpha(180));
                         painter.galley(pill.min + pad, galley, Color32::WHITE);
-                        if k == self.frame {
-                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(2.0_f32, theme::ACCENT), egui::StrokeKind::Inside);
-                        } else if resp.hovered() {
-                            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0_f32, theme::TEXT_WEAK), egui::StrokeKind::Inside);
-                        }
+                        // Select before drawing, so the purple border appears in the same frame as
+                        // the click instead of one frame later.
                         if resp.clicked() {
                             self.frame = k;
+                        }
+                        // Only the selected shot gets a border (no hover border, as in index.html;
+                        // the pointer cursor shows it's clickable).
+                        if k == self.frame {
+                            painter.rect_stroke(rect, R, egui::Stroke::new(2.0_f32, theme::ACCENT), egui::StrokeKind::Inside);
                         }
                     }
                 });
