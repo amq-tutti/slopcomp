@@ -502,7 +502,8 @@ fn shortcut_groups(tab: Tab) -> Vec<theme::ShortcutGroup> {
             sub: true,
             rows: vec![
                 (vec!["1", "–", "9"], "Show that source (from Side by side too)"),
-                (vec!["Space"], "Show the next source"),
+                (vec!["Space", "/", "click"], "Show the next source"),
+                (vec!["Shift", "+", "click"], "Show the previous source"),
             ],
         },
     ];

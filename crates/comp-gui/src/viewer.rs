@@ -734,18 +734,20 @@ impl Viewer {
             format!("{} · #{} · {} · {}×{}", src.label, sh.source_frame, sh.pict_type, sh.width, sh.height)
         };
 
+        // Visible part of the image in Flicker mode (not the black bars around it).
+        let mut flick_area: Option<Rect> = None;
         match self.mode {
             Mode::Grid | Mode::Flicker => {
                 for (i, &s) in shown.iter().enumerate() {
                     let rect = panels[i];
                     painter.rect_filled(rect, 0.0, Color32::BLACK);
                     let file = result.sources[s].shots[k].file.clone();
-                    if let Some(tex) = self.texture(&file, false) {
+                    if let Some(tex) = self.texture(&file, false).or_else(|| self.texture(&file, true)) {
                         let img_rect = self.image_rect(rect, tex.size_vec2(), result);
                         painter.with_clip_rect(rect).image(tex.id(), img_rect, uv(), Color32::WHITE);
-                    } else if let Some(tex) = self.texture(&file, true) {
-                        let img_rect = self.image_rect(rect, tex.size_vec2(), result);
-                        painter.with_clip_rect(rect).image(tex.id(), img_rect, uv(), Color32::WHITE);
+                        if self.mode == Mode::Flicker {
+                            flick_area = Some(img_rect.intersect(rect));
+                        }
                     }
                     label(painter, rect, shot_label(s), false);
                 }
@@ -772,6 +774,20 @@ impl Viewer {
                 painter.line_segment([Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)], egui::Stroke::new(2.0_f32, Color32::WHITE));
                 label(painter, rect, shot_label(self.left), false);
                 label(painter, rect, shot_label(self.right), true);
+            }
+        }
+        // Flicker: clicking the picture (not dragging, which pans) shows the next source, like Space
+        // and like clicking the image on slow.pics. Shift + click goes back. The pointer cursor
+        // shows where that works.
+        if let Some(area) = flick_area {
+            let over = |p: Option<Pos2>| p.is_some_and(|p| area.contains(p));
+            if over(resp.hover_pos()) && !resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() && over(resp.interact_pointer_pos()) {
+                let n = result.sources.len().max(1);
+                let back = ui.input(|i| i.modifiers.shift);
+                self.flick = if back { (self.flick + n - 1) % n } else { (self.flick + 1) % n };
             }
         }
         for (i, r) in star_labels.iter().enumerate() {

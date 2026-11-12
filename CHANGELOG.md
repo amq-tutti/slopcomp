@@ -17,6 +17,8 @@ its notes.
   frame is only picked when every limited source matches, for example B in the encodes and P in
   the BD and WEB they came from. Before, only one source could have a frame type. Older projects
   and saved setups with a single rule still load.
+- In Flicker mode, clicking the image shows the next source, as on slow.pics (Shift + click goes
+  back). Works in the app's viewer and in the offline `index.html`.
 
 ### Fixed
 

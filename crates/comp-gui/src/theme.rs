@@ -630,7 +630,8 @@ pub struct ShortcutGroup {
     pub current: bool,
     /// A view mode within a screen ("Viewer · Slider"): drawn a little tighter under its screen.
     pub sub: bool,
-    /// Keys and what they do. "–" and lower-case words ("scroll", "drag") are drawn as text, not keycaps.
+    /// Keys and what they do. "–", "/", "+" and lower-case words ("scroll", "drag") are drawn as
+    /// text, not keycaps: `["Space", "/", "click"]` is either one, `["Shift", "+", "click"]` both together.
     pub rows: Vec<(Vec<&'static str>, &'static str)>,
 }
 
@@ -706,7 +707,7 @@ pub fn shortcuts_button(ui: &mut Ui, groups: &[ShortcutGroup]) {
                                         ui.set_min_width(118.0);
                                         ui.spacing_mut().item_spacing.x = 4.0;
                                         for k in keys {
-                                            let plain = *k == "–" || k.chars().next().is_some_and(|c| c.is_lowercase());
+                                            let plain = matches!(*k, "–" | "/" | "+") || k.chars().next().is_some_and(|c| c.is_lowercase());
                                             if plain {
                                                 ui.label(RichText::new(*k).color(TEXT_WEAK));
                                             } else {

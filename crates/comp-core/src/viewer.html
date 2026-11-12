@@ -91,7 +91,8 @@ footer { background: var(--panel); border-top: 1px solid var(--line); overflow-x
     <table>
       <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>previous / next frame</td></tr>
       <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>show source N (flicker), or set the right side (slider)</td></tr>
-      <tr><td><kbd>Space</kbd></td><td>next source (flicker)</td></tr>
+      <tr><td><kbd>Space</kbd> / click</td><td>next source (flicker)</td></tr>
+      <tr><td><kbd>Shift</kbd> + click</td><td>previous source (flicker)</td></tr>
       <tr><td><kbd>G</kbd> <kbd>S</kbd> <kbd>F</kbd></td><td>side by side / slider / flicker</td></tr>
       <tr><td>wheel, <kbd>+</kbd> <kbd>−</kbd></td><td>zoom (all panels stay in sync)</td></tr>
       <tr><td>drag</td><td>pan (in slider mode: move the divider)</td></tr>
@@ -279,6 +280,22 @@ function clampPan() {
   state.tx = Math.min(0, Math.max(1 - s, state.tx));
   state.ty = Math.min(0, Math.max(1 - s, state.ty));
 }
+// The picture's on-screen box inside a panel (object-fit: contain, then zoomed and panned),
+// clipped to the panel: the black bars around it don't count.
+function pictureBox(p) {
+  const im = p.querySelector("img");
+  if (!im || !im.naturalWidth) return null;
+  const b = im.getBoundingClientRect(), pr = p.getBoundingClientRect();
+  const s = Math.min(b.width / im.naturalWidth, b.height / im.naturalHeight);
+  const w = im.naturalWidth * s, h = im.naturalHeight * s;
+  const l = Math.max(pr.left, b.left + (b.width - w) / 2), t = Math.max(pr.top, b.top + (b.height - h) / 2);
+  const r = Math.min(pr.right, b.left + (b.width + w) / 2), bt = Math.min(pr.bottom, b.top + (b.height + h) / 2);
+  return { l, t, r, b: bt };
+}
+function onPicture(p, x, y) {
+  const q = pictureBox(p);
+  return !!q && x >= q.l && x <= q.r && y >= q.t && y <= q.b;
+}
 function attachPanZoom(p) {
   p.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -290,6 +307,8 @@ function attachPanZoom(p) {
     p.classList.add("dragging");
     const r = p.getBoundingClientRect();
     let lx = e.clientX, ly = e.clientY;
+    const x0 = e.clientX, y0 = e.clientY;
+    const downOnPicture = onPicture(p, e.clientX, e.clientY);
     const sliderDrag = state.mode === "slider" && state.scale === 1;
     const move = (ev) => {
       if (sliderDrag) {
@@ -302,10 +321,23 @@ function attachPanZoom(p) {
       }
       applyTransform();
     };
-    const up = () => { p.classList.remove("dragging"); p.removeEventListener("pointermove", move); p.removeEventListener("pointerup", up); };
+    const up = (ev) => {
+      p.classList.remove("dragging"); p.removeEventListener("pointermove", move); p.removeEventListener("pointerup", up);
+      // Flicker: a click without dragging shows the next source (Shift + click: the previous one).
+      if (state.mode === "flicker" && downOnPicture && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) {
+        const n = sources.length;
+        state.flick = (state.flick + (ev.shiftKey ? n - 1 : 1)) % n;
+        render();
+      }
+    };
     p.addEventListener("pointermove", move);
     p.addEventListener("pointerup", up);
     if (sliderDrag) move(e);
+  });
+  // Flicker: pointer cursor over the picture, where a click shows the next source.
+  p.addEventListener("pointermove", (e) => {
+    if (state.mode !== "flicker" || p.classList.contains("dragging")) { p.style.cursor = ""; return; }
+    p.style.cursor = onPicture(p, e.clientX, e.clientY) ? "pointer" : "";
   });
   // In slider mode at zoom > 1, hold Alt while moving to place the divider.
   p.addEventListener("pointermove", (e) => {
