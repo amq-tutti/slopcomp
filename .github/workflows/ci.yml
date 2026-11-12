@@ -1,7 +1,7 @@
 name: CI
 
 # Only code and build inputs trigger CI (README, docs and changelog edits don't); the Actions tab
-# can still start a run by hand.
+# can still start a run by hand. Changing this file triggers it too.
 on:
   push:
     branches: [master]
