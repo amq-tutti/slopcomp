@@ -19,7 +19,7 @@ use comp_core::sync::{suggest_offset, SyncOptions};
 use comp_core::edit::Editor;
 use comp_core::pairing;
 use comp_core::season::{self, SeasonEvent};
-use comp_core::project::{FrameTypeRule, Project, ProjectSource, Rules};
+use comp_core::project::{Project, ProjectSource, Rules};
 use comp_core::source::{OpenOptions, VideoSource};
 
 #[derive(Parser)]
@@ -137,8 +137,9 @@ enum Cmd {
         #[arg(long = "deint")]
         deint: Vec<String>,
         /// Only pick frames whose picture type in LABEL is one of TYPES, e.g. --frame-type ENC=B.
+        /// Repeatable, one per source; all must match (e.g. ENC=B and BD=P).
         #[arg(long = "frame-type", value_parser = parse_kv)]
-        frame_type: Option<(String, String)>,
+        frame_type: Vec<(String, String)>,
         /// Leave out a reference-timeline range: START-END as seconds or [hh:]mm:ss. Repeatable.
         #[arg(long = "exclude")]
         exclude: Vec<String>,
@@ -342,7 +343,7 @@ fn main() -> Result<()> {
             select.reject_transitions = p.rules.scene_changes;
             select.duplicate_distance = p.rules.duplicates.then_some(6);
             select.flat_threshold = p.rules.flat.then_some(0.02);
-            select.frame_type = p.frame_type.as_ref().map(|r| (r.source.clone(), r.types.to_ascii_uppercase().chars().collect()));
+            select.frame_types = p.frame_type_rules();
             for r in &p.exclude {
                 select.exclude.push(parse_time_range(r)?);
             }
@@ -496,8 +497,8 @@ fn main() -> Result<()> {
                 select.duplicate_distance = None;
                 select.reject_transitions = false;
             }
-            if let Some((label, types)) = frame_type {
-                select.frame_type = Some((label, types.to_ascii_uppercase().chars().collect()));
+            for (label, types) in &frame_type {
+                select.frame_types.push((label.clone(), types.to_ascii_uppercase().chars().collect()));
             }
             for r in &exclude {
                 select.exclude.push(parse_time_range(r)?);
@@ -511,7 +512,7 @@ fn main() -> Result<()> {
                     frame: explicit.clone(),
                     exclude_op_ed,
                     exclude: exclude.clone(),
-                    frame_type: select.frame_type.as_ref().map(|(l, t)| FrameTypeRule { source: l.clone(), types: t.iter().collect() }),
+                    frame_type: None,
                     rules: Rules {
                         black_threshold: select.dark_threshold.map(|t| (t as f64 * 1000.0).round() / 1000.0),
                         scene_changes: select.reject_transitions,
@@ -561,6 +562,7 @@ fn main() -> Result<()> {
                                 ivtc: field(&ivtc),
                                 deint: field(&deint),
                                 matrix: matrices.iter().find(|(ml, _)| ml == l).map(|(_, v)| v.clone()),
+                                frame_type: frame_type.iter().find(|(fl, _)| fl == l).map(|(_, t)| t.to_ascii_uppercase()),
                             }
                         })
                         .collect(),

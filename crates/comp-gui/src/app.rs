@@ -93,6 +93,7 @@ impl App {
         install_fonts(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx);
         let mut setup = cc.storage.and_then(|s| eframe::get_value::<Setup>(s, STORAGE_KEY)).unwrap_or_default();
+        setup.migrate();
         // `slopcomp project.toml` opens a project.
         let mut project_path = None;
         if let Some(arg) = std::env::args().skip(1).find(|a| a.ends_with(".toml")) {
@@ -216,7 +217,6 @@ impl App {
     fn clear_comparison(&mut self) {
         self.setup.sources.clear();
         self.setup.name.clear();
-        self.setup.frame_type = None;
         self.setup.seed = random_seed();
         self.setup.skip_episodes.clear();
         self.project_path = None;
@@ -935,7 +935,6 @@ impl App {
                 -1 => self.setup.sources.swap(i, i - 1),
                 _ => self.setup.sources.swap(i, i + 1),
             }
-            self.setup.frame_type = None;
         }
     }
 
@@ -989,33 +988,40 @@ impl App {
             });
             ui.end_row();
 
-            ui.label("Frame type");
-            ui.horizontal(|ui| {
-                let mut on = s.frame_type.is_some();
-                theme::checkbox(ui, &mut on, "Only frames that are");
-                if on && s.frame_type.is_none() {
-                    s.frame_type = Some((s.sources.len().saturating_sub(1), "B".into()));
+            ui.label("Frame types").on_hover_text(
+                "Only pick frames whose picture type matches in every source with a type ticked. \
+                 For example B in the encodes (where they're weakest) and P in the BD and WEB they came from. \
+                 Nothing ticked means any type.",
+            );
+            ui.vertical(|ui| {
+                if s.sources.is_empty() {
+                    ui.label(RichText::new("Add sources to limit their frame types").weak());
                 }
-                if !on {
-                    s.frame_type = None;
-                }
-                if let Some((idx, types)) = s.frame_type.as_mut() {
-                    egui::ComboBox::from_id_salt("ftype")
-                        .selected_text(types.clone())
-                        .show_ui(ui, |ui| {
-                            for t in ["B", "P", "I", "BP"] {
-                                ui.selectable_value(types, t.to_string(), t);
+                egui::Grid::new("frame_types").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
+                    for r in s.sources.iter_mut() {
+                        ui.label(&r.label);
+                        ui.horizontal(|ui| {
+                            if !r.has_frame_types() {
+                                ui.label(RichText::new("any (IVTC'd or deinterlaced frames have no single type)").weak());
+                                return;
+                            }
+                            for t in ['I', 'P', 'B'] {
+                                let mut on = r.frame_types.contains(t);
+                                if theme::checkbox(ui, &mut on, &t.to_string()).changed() {
+                                    // Keep a stable I, P, B order so saved projects don't churn.
+                                    r.frame_types = ['I', 'P', 'B']
+                                        .into_iter()
+                                        .filter(|&c| if c == t { on } else { r.frame_types.contains(c) })
+                                        .collect();
+                                }
+                            }
+                            if r.frame_types.is_empty() {
+                                ui.label(RichText::new("any").weak());
                             }
                         });
-                    ui.label("frames in");
-                    egui::ComboBox::from_id_salt("ftype_src")
-                        .selected_text(s.sources.get(*idx).map(|r| r.label.clone()).unwrap_or_default())
-                        .show_ui(ui, |ui| {
-                            for (i, r) in s.sources.iter().enumerate() {
-                                ui.selectable_value(idx, i, &r.label);
-                            }
-                        });
-                }
+                        ui.end_row();
+                    }
+                });
             });
             ui.end_row();
 
@@ -1649,9 +1655,14 @@ impl App {
             ui.label(if skip.is_empty() { weak("nothing".into()) } else { RichText::new(skip.join(", ")) });
             ui.end_row();
 
-            if let Some((idx, types)) = &s.frame_type {
-                key(ui, "Frame type");
-                ui.label(format!("only {types} frames in {}", s.sources.get(*idx).map(|r| r.label.as_str()).unwrap_or("?")));
+            let rules: Vec<String> = s
+                .sources
+                .iter()
+                .filter_map(|r| r.frame_type_rule().map(|t| format!("{} in {}", t.chars().map(String::from).collect::<Vec<_>>().join("/"), r.label)))
+                .collect();
+            if !rules.is_empty() {
+                key(ui, "Frame types");
+                ui.label(rules.join(", "));
                 ui.end_row();
             }
 

@@ -16,6 +16,7 @@
 //! path = "/media/To Heart DVD"
 //! offset = "-0.5s"                  # seconds ("…s") or frames
 //! matrix = "601"
+//! frame_type = "B"                  # only frames that are B-frames here ("BP" = B or P)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -42,7 +43,9 @@ pub struct Project {
     /// Extra excluded ranges on the reference timeline, "START-END" in seconds or [hh:]mm:ss.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Older single frame-type rule (`[frame_type] source = "ENC"`, `types = "B"`). Still read,
+    /// and moved onto that source's `frame_type` on load; never written.
+    #[serde(default, skip_serializing)]
     pub frame_type: Option<FrameTypeRule>,
     #[serde(default)]
     pub rules: Rules,
@@ -97,6 +100,9 @@ pub struct ProjectSource {
     pub deint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matrix: Option<String>,
+    /// Only pick frames whose picture type in this source is one of these, e.g. "B" or "BP".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_type: Option<String>,
 }
 
 fn default_out() -> PathBuf {
@@ -124,7 +130,24 @@ impl Project {
         if p.sources.len() < 2 {
             return Err(Error::Spec(format!("{}: need at least two [[source]] entries", path.display())));
         }
+        if let Some(rule) = p.frame_type.take() {
+            let s = p.sources.iter_mut().find(|s| s.label == rule.source).ok_or_else(|| {
+                Error::Spec(format!("{}: frame_type source '{}' isn't one of the sources", path.display(), rule.source))
+            })?;
+            s.frame_type.get_or_insert(rule.types);
+        }
         Ok(p)
+    }
+
+    /// Frame-type rules as (source label, types), for [`crate::comp::SelectOptions::frame_types`].
+    pub fn frame_type_rules(&self) -> Vec<(String, Vec<char>)> {
+        self.sources
+            .iter()
+            .filter_map(|s| {
+                let types: Vec<char> = s.frame_type.as_deref()?.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace()).collect();
+                (!types.is_empty()).then(|| (s.label.clone(), types))
+            })
+            .collect()
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -180,6 +203,20 @@ matrix = "601"
         p.save(&dir.join("p2.toml")).unwrap();
         let q = Project::load(&dir.join("p2.toml")).unwrap();
         assert_eq!(p, q);
+
+        // The older single rule lands on its source and is written back per source.
+        std::fs::write(
+            &file,
+            "[frame_type]\nsource = 'ENC'\ntypes = 'B'\n[[source]]\nlabel='REF'\npath='a'\nframe_type='P'\n[[source]]\nlabel='ENC'\npath='b'\n",
+        )
+        .unwrap();
+        let p = Project::load(&file).unwrap();
+        assert_eq!(p.frame_type, None);
+        assert_eq!(p.frame_type_rules(), vec![("REF".into(), vec!['P']), ("ENC".into(), vec!['B'])]);
+        p.save(&dir.join("p3.toml")).unwrap();
+        let text = std::fs::read_to_string(dir.join("p3.toml")).unwrap();
+        assert!(!text.contains("[frame_type]") && text.matches("frame_type =").count() == 2, "{text}");
+        assert_eq!(Project::load(&dir.join("p3.toml")).unwrap(), p);
 
         std::fs::write(&file, "frames = 3\nbogus = 1\n[[source]]\nlabel='a'\npath='x'\n").unwrap();
         assert!(Project::load(&file).is_err(), "unknown keys are rejected");

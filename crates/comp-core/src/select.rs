@@ -142,10 +142,9 @@ where
     let mut attempt = |lo: i64, hi: i64, rep: &mut PickReport| -> Result<Option<(i32, Option<&'static str>)>, E> {
         let mut best: Option<(u8, i32, &'static str)> = None;
         let mut tried = Vec::new();
-        for _ in 0..max_tries.max(1) {
-            if tried.len() as i64 >= hi - lo {
-                break;
-            }
+        // `max_tries` distinct candidates (or the whole bin, if smaller): drawing a frame that was
+        // already judged doesn't use up a try, so small bins are searched completely.
+        while tried.len() < max_tries.max(1) && (tried.len() as i64) < hi - lo {
             let cand = allowed.nth(rng.gen_range(lo..hi));
             if tried.contains(&cand) {
                 continue;

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use comp_core::comp::{CompSpec, FramePick, SelectOptions, SourceSpec};
 use comp_core::convert::ConvertOptions;
 use comp_core::filter::{FieldMode, FieldOptions, FieldOrder};
-use comp_core::project::{FrameTypeRule, Project, ProjectSource, Rules};
+use comp_core::project::{Project, ProjectSource, Rules};
 use comp_core::source::{self, OpenOptions};
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,10 @@ pub struct SourceRow {
     #[serde(default)]
     pub episode_offsets: std::collections::BTreeMap<String, (f64, i32)>,
     pub matrix: Option<i32>,
+    /// Picture types a frame may have in this source to be picked, e.g. "B" or "PB"; empty means
+    /// any. Ignored for IVTC'd/deinterlaced sources.
+    #[serde(default)]
+    pub frame_types: String,
 }
 
 impl SourceRow {
@@ -56,7 +60,18 @@ impl SourceRow {
             offset_frames: 0,
             episode_offsets: Default::default(),
             matrix: None,
+            frame_types: String::new(),
         }
+    }
+
+    /// Whether picture types exist for this source (they don't after IVTC/deinterlacing).
+    pub fn has_frame_types(&self) -> bool {
+        self.field == Field::Progressive
+    }
+
+    /// The types this source is limited to, if any (always none when field-processed).
+    pub fn frame_type_rule(&self) -> Option<&str> {
+        (self.has_frame_types() && !self.frame_types.is_empty()).then_some(self.frame_types.as_str())
     }
 
     /// Offset used for an episode: its own one if set in Sync, else the default.
@@ -94,7 +109,9 @@ pub struct Setup {
     pub skip_duplicates: bool,
     pub skip_flat: bool,
     pub exclude_op_ed: bool,
-    /// (source index, types such as "B").
+    /// Older single frame-type rule (source index, types). Only read from saved setups, then
+    /// moved onto that source's [`SourceRow::frame_types`] by [`Setup::migrate`].
+    #[serde(skip_serializing)]
     pub frame_type: Option<(usize, String)>,
     pub stretch_anamorphic: bool,
     /// Detect and crop black borders (pillarbox/letterbox).
@@ -217,9 +234,11 @@ impl Setup {
             reject_transitions: self.skip_scene_changes,
             duplicate_distance: self.skip_duplicates.then_some(6),
             flat_threshold: self.skip_flat.then_some(0.02),
-            frame_type: self.frame_type.as_ref().and_then(|(i, t)| {
-                self.sources.get(*i).map(|s| (s.label.trim().to_string(), t.to_ascii_uppercase().chars().collect()))
-            }),
+            frame_types: self
+                .sources
+                .iter()
+                .filter_map(|s| s.frame_type_rule().map(|t| (s.label.trim().to_string(), t.to_ascii_uppercase().chars().collect())))
+                .collect(),
             exclude_chapter_op_ed: self.exclude_op_ed,
             ..Default::default()
         };
@@ -246,9 +265,7 @@ impl Setup {
             frame: vec![],
             exclude_op_ed: self.exclude_op_ed,
             exclude: vec![],
-            frame_type: self.frame_type.as_ref().and_then(|(i, t)| {
-                self.sources.get(*i).map(|s| FrameTypeRule { source: s.label.clone(), types: t.clone() })
-            }),
+            frame_type: None,
             rules: Rules {
                 black_threshold: self.skip_black.then_some((self.black_threshold as f64 * 1000.0).round() / 1000.0),
                 scene_changes: self.skip_scene_changes,
@@ -291,6 +308,7 @@ impl Setup {
                         ivtc: (r.field == Field::Ivtc).then(|| order.to_string()),
                         deint: (r.field == Field::Deinterlace).then(|| order.to_string()),
                         matrix: r.matrix.map(|m| m.to_string()),
+                        frame_type: r.frame_type_rule().map(str::to_string),
                     }
                 })
                 .collect(),
@@ -355,13 +373,20 @@ impl Setup {
                 Some("2020") => Some(9),
                 Some(m) => Some(m.parse().map_err(|_| format!("matrix \"{m}\" isn't known. Use 709, 601, 470bg, or 2020."))?),
             };
+            r.frame_types = ps.frame_type.as_deref().unwrap_or_default().to_ascii_uppercase();
             s.sources.push(r);
         }
-        if let Some(ft) = &p.frame_type {
-            if let Some(i) = s.sources.iter().position(|r| r.label == ft.source) {
-                s.frame_type = Some((i, ft.types.clone()));
+        Ok(s)
+    }
+
+    /// Moves the older single frame-type rule of a saved setup onto its source.
+    pub fn migrate(&mut self) {
+        if let Some((i, types)) = self.frame_type.take() {
+            if let Some(r) = self.sources.get_mut(i) {
+                if r.frame_types.is_empty() {
+                    r.frame_types = types;
+                }
             }
         }
-        Ok(s)
     }
 }

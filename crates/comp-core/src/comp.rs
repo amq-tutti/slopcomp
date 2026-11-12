@@ -99,9 +99,11 @@ pub struct SelectOptions {
     pub duplicate_distance: Option<u32>,
     /// Reject nearly flat frames (solid colours, title cards) below this thumbnail std-dev.
     pub flat_threshold: Option<f32>,
-    /// Only accept frames whose picture type in the given source (by label) is one of these
-    /// (e.g. `['B']` to compare encoder behaviour on B-frames).
-    pub frame_type: Option<(String, Vec<char>)>,
+    /// Picture-type rules, one per source (by label): a frame is only accepted when, in every
+    /// listed source, its picture type is one of that source's types. For example B in the
+    /// encodes (where they're weakest) and P in the BD and WEB they were made from. Sources not
+    /// listed accept any type.
+    pub frame_types: Vec<(String, Vec<char>)>,
     /// Leave out OP/ED found in chapter names (from whichever source has them).
     pub exclude_chapter_op_ed: bool,
     /// Extra excluded ranges on the reference timeline, in seconds.
@@ -119,7 +121,7 @@ impl Default for SelectOptions {
             reject_transitions: true,
             duplicate_distance: None,
             flat_threshold: None,
-            frame_type: None,
+            frame_types: Vec::new(),
             exclude_chapter_op_ed: false,
             exclude: Vec::new(),
             max_tries: 16,
@@ -597,22 +599,28 @@ fn pick_random(
     use std::collections::HashMap;
 
     let sel = &spec.select;
-    let type_src = match &sel.frame_type {
-        Some((label, types)) => {
-            let i = spec
-                .sources
-                .iter()
-                .position(|s| &s.label == label)
-                .ok_or_else(|| Error::Spec(format!("frame-type source '{label}' not found")))?;
-            if sources[i].is_filtered() {
-                return Err(Error::Spec(format!(
-                    "'{label}' is IVTC'd/deinterlaced; picture types don't exist after field processing"
-                )));
-            }
-            Some((i, types.clone()))
+    let mut type_rules: Vec<(usize, Vec<char>)> = Vec::new();
+    for (label, types) in &sel.frame_types {
+        let i = spec
+            .sources
+            .iter()
+            .position(|s| &s.label == label)
+            .ok_or_else(|| Error::Spec(format!("frame-type source '{label}' not found")))?;
+        if sources[i].is_filtered() {
+            return Err(Error::Spec(format!(
+                "'{label}' is IVTC'd/deinterlaced; picture types don't exist after field processing"
+            )));
         }
-        None => None,
-    };
+        if sel.frame_types.iter().filter(|(l, _)| l == label).count() > 1 {
+            return Err(Error::Spec(format!("'{label}' has more than one frame-type rule")));
+        }
+        if !types.is_empty() {
+            type_rules.push((i, types.clone()));
+        }
+    }
+    // Every rule cuts the share of matching frames (B in two encodes and P in two sources can be
+    // a few percent), so allow more tries per bin before falling back.
+    let max_tries = if type_rules.is_empty() { sel.max_tries } else { sel.max_tries.max(64) };
     let n_ref = sources[0].info().num_frames;
     let mut cache: HashMap<i32, FrameStats> = HashMap::new();
     let mut stats = |sources: &mut [AnySource], r: i32| -> Result<Option<FrameStats>> {
@@ -628,11 +636,12 @@ fn pick_random(
     };
     let mut picked_hashes: Vec<(i32, u64)> = Vec::new();
 
-    let rep = select::pick(allowed, count, seed, sel.max_tries, |r, picked| -> Result<Verdict> {
+    let rep = select::pick(allowed, count, seed, max_tries, |r, picked| -> Result<Verdict> {
         spec.check_cancel()?;
         picked_hashes.retain(|(f, _)| picked.contains(f));
-        // 1. Frame type (cheapest to reject early on, one decode).
-        if let Some((ti, types)) = &type_src {
+        // 1. Frame types (cheapest to reject early on: one decode per rule, stopping at the first
+        //    source that doesn't match).
+        for (ti, types) in &type_rules {
             let f = maps[*ti][r as usize].unwrap();
             let pt = sources[*ti].frame(f)?.pict_type;
             if !types.contains(&pt) {

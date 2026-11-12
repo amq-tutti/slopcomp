@@ -28,7 +28,8 @@ and get lossless PNG screenshots ready for slow.pics.
   rating that flags a wrong match.
 - **IVTC and deinterlacing** for 1080i BD remuxes and telecined NTSC DVDs.
 - **Smart frame picking.** Black screens and scene changes are skipped. Optional rules skip
-  near-duplicates, flat or dark frames, or keep only B-frames from an encode.
+  near-duplicates, flat or dark frames, or limit the frame type per source (say B in the
+  encodes and P in the BD).
 - **Whole seasons at once.** Drop in episode folders: episodes are paired by their numbers,
   OP/ED chapters can be left out, and you get one comparison per episode.
 - **Black borders cropped** per source, and anamorphic DVDs stretched to their display size.
@@ -172,7 +173,8 @@ Picks are made on the reference timeline, and only from frames that exist in eve
 - Each candidate is judged on a small luma thumbnail. By default only black screens (mean luma
   below 3%) and frames next to a scene cut or inside a fade are rejected, and a rejected candidate
   is re-rolled up to 16 times in its bin. Near-duplicates (difference hash), flat frames and dark
-  scenes are opt-in. **B-frames only** checks the picture type ffms2 reports for an encode.
+  scenes are opt-in. **Frame types** can be limited per source (I, P and/or B), using the
+  picture type ffms2 reports. A frame is only picked when every limited source matches.
 - Black screens and scene changes are never used as fallbacks. If a bin has nothing else, the
   pick moves to the largest gap between the other picks.
 - OP/ED can be left out using chapter names (`OP`, `Opening`, `オープニング`, …) or time ranges.
@@ -210,7 +212,7 @@ VFM/VDecimate algorithms for IVTC. What's different is what's around them.
 | **Lining up sources** | Done in the script (`Trim`, padding) by hand. The plugin then maps frames by frame number, or by timestamp in the timeline's time mode | By timestamp, with suggested offsets, a confidence score and drift checks. Offsets can differ per episode |
 | **Random frames** | Up to 75, one per equal slice of a start–end range, optional seed | Any number, one per equal slice of the episode, seeded |
 | **Skipped frames** | None by default | Black screens and frames at scene cuts or fades. Near-duplicates, flat frames and dark scenes are opt-in |
-| **Picture types** | Only frames whose type is I, P or B (as ticked) in *every* source | Only B (or P, I) frames in one chosen encode |
+| **Picture types** | One set of allowed types (I, P, B), which every source must match | Allowed types per source, e.g. B in the encodes and P in the BD and WEB |
 | **Other picking** | A set number of dark and light frames; a manual frame list, with a shortcut to add the current frame | OP/ED left out by chapter names or time ranges |
 | **IVTC and filters** | Anything VapourSynth can do: VIVTC with every option, Wobbly, descale tests, your own encode chain | IVTC (VFM/VDecimate defaults, 5-frame cycle, 8-bit) or deinterlacing, plus border crop and anamorphic stretch |
 | **Whole seasons** | One script and run per episode | Folders are paired by episode number, one comparison per episode |
@@ -266,7 +268,7 @@ Useful `run` options:
 
 - `--offset LABEL=N` / `LABEL=Xs`: frame or time offset. Sources are aligned by timestamp first, so VFR and CFR releases line up.
 - `--ivtc LABEL[:tff|bff]` / `--deint LABEL`: field processing for 1080i BD remuxes and NTSC DVDs.
-- `--frame-type ENC=B`: only frames that are B-frames in the `ENC` source.
+- `--frame-type ENC=B`: only frames that are B-frames in the `ENC` source. Repeat it for other sources (`--frame-type BD=P`); a frame must match all of them. `BP` allows B or P.
 - `--exclude-op-ed`, `--exclude 1:30-3:00`: leave out OP/ED chapters or time ranges. Episodes are compared in full by default.
 - `--skip-duplicates`, `--skip-flat`, `--dark 0.1`, `--no-reject`: change the frame-picking rules. By default only black screens and scene changes are skipped.
 - `--matrix LABEL=709`, `--no-sar`.

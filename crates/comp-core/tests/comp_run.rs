@@ -217,12 +217,61 @@ fn picking_skips_black_screens_and_scene_cuts() {
 #[test]
 fn frame_type_rule_picks_only_requested_types() {
     let enc = || SourceSpec::new("ENC", corpus("h264_opengop.mkv"));
-    let select = comp_core::comp::SelectOptions { frame_type: Some(("ENC".into(), vec!['B'])), ..Default::default() };
+    let select = comp_core::comp::SelectOptions { frame_types: vec![("ENC".into(), vec!['B'])], ..Default::default() };
     let res = comp::run(&spec_with("ftype", vec![SourceSpec::new("REF", corpus("hevc_10bit.mkv")), enc()], 10, select), &|_| {}).unwrap();
     let types: String = res.sources[1].shots.iter().map(|s| s.pict_type.as_str()).collect();
     eprintln!("ENC types: {types}");
     assert!(res.fallbacks.is_empty(), "{:?}", res.fallbacks);
     assert!(types.chars().all(|c| c == 'B'), "{types}");
+}
+
+#[test]
+fn frame_type_rules_combine_across_sources() {
+    // B-frames in two encodes and P-frames in the source they're compared against, as in
+    // "encodes at their weakest, source at its usual quality" comparisons.
+    let select = comp_core::comp::SelectOptions {
+        frame_types: vec![("ENC".into(), vec!['B']), ("ENC2".into(), vec!['B']), ("REF".into(), vec!['P'])],
+        ..Default::default()
+    };
+    let sources = vec![
+        SourceSpec::new("REF", corpus("hevc_10bit.mkv")),
+        SourceSpec::new("ENC", corpus("h264_opengop.mkv")),
+        SourceSpec::new("ENC2", corpus("h264_opengop.mp4")),
+    ];
+    let res = comp::run(&spec_with("ftypes", sources, 8, select), &|_| {}).unwrap();
+    let types = |i: usize| -> String { res.sources[i].shots.iter().map(|s| s.pict_type.as_str()).collect() };
+    eprintln!("REF {} / ENC {} / ENC2 {} / fallbacks {:?}", types(0), types(1), types(2), res.fallbacks);
+
+    // Ground truth: the three 240-frame clips line up frame for frame (same rate, no offset).
+    let all_types = |name: &str| -> Vec<char> {
+        let mut s = comp_core::source::VideoSource::open(&corpus(name), &OpenOptions::default()).unwrap();
+        (0..s.info().num_frames).map(|i| s.pict_type(i).unwrap()).collect()
+    };
+    let (r, e, e2) = (all_types("hevc_10bit.mkv"), all_types("h264_opengop.mkv"), all_types("h264_opengop.mp4"));
+    let matches = |f: usize| r[f] == 'P' && e[f] == 'B' && e2[f] == 'B';
+    assert!((0..r.len()).filter(|&f| matches(f)).count() >= 8, "corpus has too few matching frames");
+
+    let fallback: Vec<i32> = res.fallbacks.iter().map(|(f, _)| *f).collect();
+    let bin = r.len() / 8;
+    for (k, &f) in res.frames.iter().enumerate() {
+        let f = f as usize;
+        if fallback.contains(&(f as i32)) {
+            // Only allowed when nothing in its bin matches every rule.
+            let b = f / bin;
+            assert!(!(b * bin..(b + 1) * bin).any(matches), "pick {k} (frame {f}) fell back although its bin has a match");
+        } else {
+            assert!(matches(f), "pick {k} (frame {f}) is {}/{}/{}", r[f], e[f], e2[f]);
+        }
+    }
+    assert!(fallback.len() < res.frames.len() / 2, "{fallback:?}");
+
+    // A source listed twice is a mistake, not a silent override.
+    let twice = comp_core::comp::SelectOptions {
+        frame_types: vec![("ENC".into(), vec!['B']), ("ENC".into(), vec!['P'])],
+        ..Default::default()
+    };
+    let sources = vec![SourceSpec::new("REF", corpus("hevc_10bit.mkv")), SourceSpec::new("ENC", corpus("h264_opengop.mkv"))];
+    assert!(comp::run(&spec_with("ftypes_twice", sources, 4, twice), &|_| {}).is_err());
 }
 
 #[test]

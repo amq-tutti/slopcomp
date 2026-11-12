@@ -10,11 +10,21 @@ its notes.
 
 ## [Unreleased]
 
+### Added
+
+- Frame types can be limited per source: tick I, P and/or B for each source in Settings
+  (`--frame-type LABEL=TYPES`, repeatable, or `frame_type = "B"` in a project's `[[source]]`). A
+  frame is only picked when every limited source matches, for example B in the encodes and P in
+  the BD and WEB they came from. Before, only one source could have a frame type. Older projects
+  and saved setups with a single rule still load.
+
 ### Fixed
 
 - Some shots picked the previous frame in one source even with a 0 offset, when two releases
   round their timestamps differently (a few ms apart). Frames now match through up to a quarter
   of a frame of timestamp jitter.
+- Frame picking searched small sections less thoroughly than intended: drawing a frame it had
+  already checked used up one of its tries.
 
 ## [0.1.1] - 2026-11-12
 
