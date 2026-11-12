@@ -195,28 +195,31 @@ PNGs are named `{frame}_{label}.png`, the layout slow.pics' batch upload expects
 
 ## SlopComp and VapourSynth
 
-Most people making comparisons today write a [VapourSynth](https://www.vapoursynth.com) script:
-load the sources with `ffms2.Source` or `lsmas.LWLibavSource`, trim and IVTC them, and then save
-frames or upload them with a comparison helper. The one that came up while building SlopComp is
-[vs-preview](https://github.com/Jaded-Encoding-Thaumaturgy/vs-preview)'s comparison tool, which
-picks frames, saves them and uploads to slow.pics. SlopComp's planned slow.pics client was based
-on its upload flow.
+Most people making comparisons today write a [VapourSynth](https://www.vapoursynth.com) script
+that loads the sources, trims and IVTCs them, and sets each one as an output. They then open it in
+[vs-preview](https://github.com/Jaded-Encoding-Thaumaturgy/vs-preview), whose built-in
+**SlowPics Comps** plugin picks frames from those outputs, saves PNGs and uploads them to
+slow.pics. SlopComp's planned slow.pics client was based on that plugin's upload flow.
 
 SlopComp uses the same building blocks: ffms2 for decoding, zimg for colour conversion, and the
 VFM/VDecimate algorithms for IVTC. What's different is what's around them.
 
-| | VapourSynth script | SlopComp |
+| | VapourSynth + vs-preview | SlopComp |
 | --- | --- | --- |
-| **Setup** | VapourSynth, Python, source and IVTC plugins, a previewer, and a script | One download, nothing else to install |
-| **Alignment** | `Trim` by frame number, offsets found by eye | By timestamp (VFR and CFR line up), with suggested offsets, a confidence score and drift checks |
-| **Frame picking** | Whatever the script does, often random or hand-picked | Spread across the episode and seeded. Black screens and scene changes are skipped. B-frames only and OP/ED exclusion are optional |
-| **IVTC** | VIVTC with every option, per-frame overrides, Wobbly for hybrid or VFR content | VFM/VDecimate defaults, a fixed 5-frame cycle, 8-bit only, no overrides |
-| **Other filters** | Anything: descale, debanding, your own encode chain | None. Sources are shown as they are, apart from IVTC, crop and anamorphic stretch |
-| **Whole seasons** | Usually one script per episode | Folders are paired by episode number, one comparison per episode |
-| **Fixing shots** | Edit the script and run it again | Nudge or replace a frame in the viewer, and only those PNGs are redone |
+| **Setup** | Python 3.12+, VapourSynth, `pip install vspreview`, source and IVTC plugins, and a `.vpy` script | One download, nothing else to install |
+| **Lining up sources** | Done in the script (`Trim`, padding) by hand. The plugin then maps frames by frame number, or by timestamp in the timeline's time mode | By timestamp, with suggested offsets, a confidence score and drift checks. Offsets can differ per episode |
+| **Random frames** | Up to 75, one per equal slice of a start–end range, optional seed | Any number, one per equal slice of the episode, seeded |
+| **Skipped frames** | None by default | Black screens and frames at scene cuts or fades. Near-duplicates, flat frames and dark scenes are opt-in |
+| **Picture types** | Only frames whose type is I, P or B (as ticked) in *every* source | Only B (or P, I) frames in one chosen encode |
+| **Other picking** | A set number of dark and light frames; a manual frame list, with a shortcut to add the current frame | OP/ED left out by chapter names or time ranges |
+| **IVTC and filters** | Anything VapourSynth can do: VIVTC with every option, Wobbly, descale tests, your own encode chain | IVTC (VFM/VDecimate defaults, 5-frame cycle, 8-bit) or deinterlacing, plus border crop and anamorphic stretch |
+| **Whole seasons** | One script and run per episode | Folders are paired by episode number, one comparison per episode |
+| **Viewing and fixing** | Viewed on slow.pics. To change a shot, change the frames and run it again | Built-in viewer (side by side, slider, flicker) and an offline `index.html`. Nudge or replace one frame and only those PNGs are redone |
+| **slow.pics** | Uploads directly: collection name with TMDB placeholders, public/NSFW, tags, delete-after, account login, a history of past comps | No upload: slow.pics requires staff permission for tools. PNGs are named for its batch upload, and the upload page can be opened |
 
 If you need filtering beyond IVTC, such as comparing your own encode chain or doing a descale
-test, a script is the better tool. SlopComp is for comparing releases as they are.
+test, or you want comps uploaded straight to slow.pics, vs-preview is the better tool. SlopComp
+is for comparing releases as they are, without writing a script.
 
 ### Why VapourSynth isn't bundled
 
