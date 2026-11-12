@@ -188,6 +188,9 @@ pub struct Viewer {
     pending: std::collections::HashSet<String>,
     /// Per-file version, bumped when an edit rewrites the file (invalidates textures).
     versions: HashMap<String, u32>,
+    /// Bumped on every (re)load. Part of every texture key, so screenshots still being loaded for
+    /// a previous run, whose files can have the same names, never end up in the cache as current.
+    generation: u32,
     busy: bool,
     message: Option<(String, bool)>,
     replace_with: i32,
@@ -224,6 +227,7 @@ impl Viewer {
             textures: HashMap::new(),
             pending: Default::default(),
             versions: HashMap::new(),
+            generation: 0,
             busy: false,
             message: None,
             replace_with: 0,
@@ -233,10 +237,23 @@ impl Viewer {
         }
     }
 
-    /// Adds a comparison to the list without showing it (e.g. when a job finishes).
+    /// Adds a comparison to the list without showing it (e.g. when a job finishes). If it's the
+    /// one showing and its folder now holds a different run (it was just re-created), reloads it.
     pub fn add(&mut self, dir: &Path) {
         if !self.list.iter().any(|d| d == dir) {
             self.list.push(dir.to_owned());
+        }
+        if self.dir.as_deref() == Some(dir) && self.is_stale() {
+            self.reload();
+        }
+    }
+
+    /// Whether the folder showing now holds a different run than the one loaded (re-created with
+    /// the same name, so the same folder), or no longer has a comp.json.
+    fn is_stale(&self) -> bool {
+        match (&self.dir, &self.result) {
+            (Some(d), Some(r)) => comp_core::comp::run_id_in(d).as_deref() != Some(r.run_id.as_str()),
+            _ => false,
         }
     }
 
@@ -258,20 +275,33 @@ impl Viewer {
         }
     }
 
+    /// Shows a comparison. Already showing it: kept as it is (frame, zoom), unless its folder now
+    /// holds a different run, which is loaded fresh.
     pub fn open(&mut self, dir: &Path) {
-        self.add(dir);
-        if self.dir.as_deref() == Some(dir) && self.result.is_some() {
+        if !self.list.iter().any(|d| d == dir) {
+            self.list.push(dir.to_owned());
+        }
+        if self.dir.as_deref() == Some(dir) && self.result.is_some() && !self.is_stale() {
             return;
         }
         self.dir = Some(dir.to_owned());
+        self.reload();
+    }
+
+    /// Loads the comparison in `dir` from disk, dropping everything cached for the previous one
+    /// (the new run's screenshots can have the same file names).
+    fn reload(&mut self) {
+        let Some(dir) = self.dir.clone() else { return };
         self.result = None;
         self.textures.clear();
         self.pending.clear();
         self.versions.clear();
+        self.generation = self.generation.wrapping_add(1);
         self.frame = 0;
+        self.frame_edits.clear();
         self.busy = true;
         self.message = None;
-        let _ = self.edit_tx.send(EditReq::Open(dir.to_owned()));
+        let _ = self.edit_tx.send(EditReq::Open(dir));
     }
 
     /// Opens a picked folder: the comparison itself if it has comp.json, otherwise every comparison
@@ -298,7 +328,7 @@ impl Viewer {
     }
 
     fn key(&self, file: &str, thumb: bool) -> String {
-        format!("{file}#{}#{}", self.versions.get(file).copied().unwrap_or(0), if thumb { "t" } else { "f" })
+        format!("{file}#{}#{}#{}", self.generation, self.versions.get(file).copied().unwrap_or(0), if thumb { "t" } else { "f" })
     }
 
     /// Texture for a screenshot (full size or thumbnail), requesting a load if needed.
@@ -316,7 +346,10 @@ impl Viewer {
 
     fn pump(&mut self, ctx: &egui::Context) {
         while let Ok(l) = self.load_rx.try_recv() {
-            self.pending.remove(&l.key);
+            // Not pending any more: requested before a reload, for the previous run. Drop it.
+            if !self.pending.remove(&l.key) {
+                continue;
+            }
             if let Ok(img) = l.image {
                 // Sharp pixels when zoomed in, smooth when scaled down.
                 let opts = TextureOptions {

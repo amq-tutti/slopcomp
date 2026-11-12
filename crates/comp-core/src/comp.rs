@@ -188,6 +188,12 @@ pub struct SourceResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompResult {
     pub name: String,
+    /// Unique per run, so a comparison re-created into the same folder can be told apart from the
+    /// one it replaced (the viewer reloads, older history entries know they were overwritten).
+    /// Edits keep it: they change the run, they don't replace it. Empty in comp.json files written
+    /// before it existed.
+    #[serde(default)]
+    pub run_id: String,
     /// Whether anamorphic sources were stretched to display aspect (needed to re-shoot frames).
     #[serde(default = "default_true")]
     pub stretch_anamorphic: bool,
@@ -215,6 +221,25 @@ pub fn shot_label(label: &str) -> String {
 
 fn default_true() -> bool {
     true
+}
+
+/// A fresh run id: 16 hex digits from the clock and a random number.
+fn new_run_id() -> String {
+    use rand::Rng;
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+    format!("{:016x}", t ^ rand::thread_rng().gen::<u64>())
+}
+
+/// The run id in `<dir>/comp.json`: `Some("")` for a comparison from before run ids existed,
+/// `None` if there's no readable comp.json. Reads only that field, so it's cheap to call.
+pub fn run_id_in(dir: &Path) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Id {
+        #[serde(default)]
+        run_id: String,
+    }
+    let text = std::fs::read_to_string(dir.join("comp.json")).ok()?;
+    serde_json::from_str::<Id>(&text).ok().map(|i| i.run_id)
 }
 
 /// Re-running into the same folder: delete the shots the previous run listed in its comp.json, so
@@ -410,6 +435,7 @@ pub fn run(spec: &CompSpec, on_event: &(dyn Fn(Event) + Sync)) -> Result<CompRes
 
     let result = CompResult {
         name: spec.name.clone(),
+        run_id: new_run_id(),
         stretch_anamorphic: spec.convert.apply_sar,
         tool_version: env!("CARGO_PKG_VERSION").into(),
         seed,

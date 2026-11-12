@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -79,6 +80,9 @@ pub struct App {
     sync: SyncState,
     /// This session's jobs, oldest first; only the last can still be running.
     jobs: Vec<Job>,
+    /// Run id of the comparison each output folder last received this session. A history entry
+    /// whose run id differs was overwritten by a later run with the same name.
+    latest_run: HashMap<PathBuf, String>,
     toast: Option<(String, bool, Instant)>,
     project_path: Option<PathBuf>,
     /// Developer flag --auto-sync: request offset suggestions once the sync sources are open.
@@ -134,6 +138,7 @@ impl App {
                 status_shown: String::new(),
             },
             jobs: Vec::new(),
+            latest_run: HashMap::new(),
             toast: None,
             project_path,
             auto_sync: args.iter().any(|a| a == "--auto-sync"),
@@ -385,6 +390,7 @@ impl App {
                     },
                     SeasonEvent::EpisodeDone { result, .. } => {
                         run.log.push(stamped(format!("saved to {}", result.out_dir.display())));
+                        self.latest_run.insert(result.out_dir.clone(), result.run_id.clone());
                         self.viewer.add(&result.out_dir);
                         run.results.push(*result);
                     }
@@ -1547,7 +1553,7 @@ impl App {
                 let n = self.jobs.len();
                 for (k, job) in self.jobs.iter().enumerate().rev().filter(|(_, j)| j.finished.is_some()) {
                     theme::fade(ui, ("history", k), true, |ui| {
-                        if let Some(dirs) = ui_history_entry(ui, job, k + 1 == n) {
+                        if let Some(dirs) = ui_history_entry(ui, job, k + 1 == n, &self.latest_run) {
                             view = dirs;
                         }
                     });
@@ -1733,8 +1739,11 @@ fn ui_progress(ui: &mut egui::Ui, ctx: &egui::Context, job: &mut Job) {
 
 /// One finished job: outcome, its comparisons (open in the viewer), failures and log.
 /// Returns the comparison folders to open in the viewer when a button was clicked (the first is shown).
-fn ui_history_entry(ui: &mut egui::Ui, job: &Job, newest: bool) -> Option<Vec<PathBuf>> {
+fn ui_history_entry(ui: &mut egui::Ui, job: &Job, newest: bool, latest_run: &HashMap<PathBuf, String>) -> Option<Vec<PathBuf>> {
     let mut view = None;
+    // Re-created later with the same name, into the same folder: these screenshots are gone.
+    let replaced = |r: &CompResult| latest_run.get(&r.out_dir).is_some_and(|id| *id != r.run_id);
+    let current: Vec<&CompResult> = job.results.iter().filter(|r| !replaced(r)).collect();
     let (status, color) = match &job.finished {
         Some(Ok(())) if job.failed.is_empty() => ("done".to_string(), theme::OK),
         Some(Ok(())) => (format!("{} failed", job.failed.len()), theme::WARN),
@@ -1758,21 +1767,26 @@ fn ui_history_entry(ui: &mut egui::Ui, job: &Job, newest: bool) -> Option<Vec<Pa
         if let Some(Err(e)) = &job.finished {
             ui.colored_label(theme::ERR, format!("Stopped: {e}"));
         }
-        if job.results.len() > 1 {
-            let n = job.results.len();
+        if current.len() > 1 {
+            let n = current.len();
             if ui
                 .add(theme::primary(format!("Open all {n} in Viewer")))
                 .on_hover_text("Adds every comparison from this run to the Viewer and shows the first")
                 .clicked()
             {
-                view = Some(job.results.iter().map(|r| r.out_dir.clone()).collect());
+                view = Some(current.iter().map(|r| r.out_dir.clone()).collect());
             }
         }
         egui::Grid::new(("results", job.started)).striped(true).show(ui, |ui| {
             for r in &job.results {
                 ui.label(&r.name);
                 ui.label(RichText::new(format!("{} frames", r.frames.len())).weak());
-                if ui.small_button("Open in Viewer").clicked() {
+                if replaced(r) {
+                    ui.label(RichText::new("Replaced by a later run").color(theme::TEXT_WEAK)).on_hover_text(
+                        "A later comparison with the same name was saved to the same folder, so these screenshots \
+                         were replaced. Open the newer one from its own entry.",
+                    );
+                } else if ui.small_button("Open in Viewer").clicked() {
                     view = Some(vec![r.out_dir.clone()]);
                 }
                 ui.end_row();

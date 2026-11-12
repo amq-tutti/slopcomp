@@ -22,6 +22,10 @@ its notes.
 
 ### Fixed
 
+- Re-creating a comparison with the same name (say with more frames or a new seed) left the
+  Viewer showing the old one, with black or broken images, until it was closed. Each run now has
+  its own id in `comp.json`: the Viewer reloads when the folder holds a newer run, and the history
+  marks the older entry as replaced instead of offering to open it.
 - Some shots picked the previous frame in one source even with a 0 offset, when two releases
   round their timestamps differently (a few ms apart). Frames now match through up to a quarter
   of a frame of timestamp jitter.

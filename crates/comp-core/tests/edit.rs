@@ -45,7 +45,12 @@ fn manual_corrections() {
     };
     assert_eq!(source_frame(120), 120 - 49 + 2);
 
+    // Every run gets its own id; edits keep it (they change the run, they don't replace it).
+    let first_run = comp::run_id_in(&dir).unwrap();
+    assert_eq!(first_run.len(), 16, "{first_run:?}");
+
     let mut ed = Editor::open(&dir).unwrap();
+    assert_eq!(ed.result.run_id, first_run);
     // Nudge back by two, and check the PNG and comp.json follow.
     let png = dir.join(&ed.result.sources[1].shots[1].file);
     let before = std::fs::read(&png).unwrap();
@@ -57,6 +62,7 @@ fn manual_corrections() {
     assert_eq!(source_frame(60), 11);
     // Out-of-range frames are refused.
     assert!(ed.set_source_frame(60, 1, 999_999).is_err());
+    assert_eq!(comp::run_id_in(&dir).unwrap(), first_run, "edits keep the run id");
 
     // Replace frame 1000 with 1100: files renamed, order kept, old PNGs removed.
     let old_files: Vec<String> = ed.result.sources.iter().map(|s| s.shots[2].file.clone()).collect();
@@ -82,4 +88,12 @@ fn manual_corrections() {
     let f = ed.random_replacement(90).unwrap();
     assert!(f > 75 && f < 105 && f != 90, "{f}");
     assert!(dir.join("index.html").exists());
+
+    drop(ed);
+    // Re-creating the comparison into the same folder (same name) is a new run.
+    let again = comp::run(&spec, &|_| {}).unwrap();
+    assert_ne!(again.run_id, first_run);
+    assert_eq!(comp::run_id_in(&dir).unwrap(), again.run_id);
+    assert_eq!(comp::run_id_in(&dir.join("missing")), None);
+
 }
