@@ -12,7 +12,7 @@ and get lossless PNG screenshots ready for slow.pics.
 ![macOS · Linux · Windows](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-334155)
 [![CI](https://github.com/amq-tutti/slopcomp/actions/workflows/ci.yml/badge.svg)](https://github.com/amq-tutti/slopcomp/actions/workflows/ci.yml)
 
-[**Download**](#download) · [Features](#features) · [How it works](#how-it-works) · [Command line](#command-line) · [Building](#building-from-source)
+[**Download**](#download) · [Features](#features) · [How it works](#how-it-works) · [Under the hood](#under-the-hood) · [Command line](#command-line) · [Building](#building-from-source)
 
 <img src="docs/images/viewer.png" alt="SlopComp's viewer showing the same frame from a BD remux, a BD encode and a DVD encode side by side">
 
@@ -88,6 +88,153 @@ Setups can be saved as TOML projects, which the command-line tool can run too
 (`comp project file.toml`), and `slopcomp file.toml` opens one in the app.
 
 <sub>Screenshots show *To Heart* (© AQUAPLUS / KSS) for illustration.</sub>
+
+## Under the hood
+
+Each comparison goes through the same stages. The app and `comp` share one core library
+(`crates/comp-core`), so both behave identically.
+
+### Decoding: ffms2
+
+Every file is indexed with [ffms2](https://github.com/FFMS/ffms2), the same indexer behind
+VapourSynth's `ffms2.Source`. The index maps every frame to its packet, keyframe and timestamp, so
+asking for frame N returns exactly frame N, including with open GOPs, VFR and m2ts. Indexes are
+cached, keyed by file size, modification time and a hash of the file's first and last MiB.
+
+MPEG program streams (DVD VOB/`.mpg`) return the frame *before* the requested one when ffms2
+seeks to a keyframe, so they're decoded linearly instead. The test suite checks every frame of
+every test clip, read straight through and in random order, against an independent ffmpeg decode.
+
+### Alignment: timestamps, then offsets
+
+Sources are lined up by **time, not frame number**. A reference frame at time `t` maps to the
+frame on screen at `t + offset` in each other source, plus an optional frame nudge. This is what
+lets a VFR BD encode (23.976 with 29.97 sections) line up with a CFR DVD. Counting frames, those
+two drift ~780 frames apart over an episode.
+
+Suggested offsets (`comp sync`, or **Auto** in the Sync step) come from scene cuts:
+
+1. Black borders are detected and cropped, so a pillarboxed BD can be matched against a 4:3 DVD.
+2. A 60-second window of the reference and a ±15 s wider window of the other source are decoded
+   into 16×16 luma thumbnails.
+3. Scene cuts are found in both. The time offset that lines up the most cuts wins. With too few
+   cuts, it falls back to a correlation search over every offset.
+4. The winner is confirmed by correlating brightness-normalised thumbnails. That works across
+   resolution, codec and colour differences.
+5. The offset is re-checked at 4 more points in the episode to catch releases whose timing drifts
+   (seen with BD vs DVD).
+
+The confidence score compares the match to the correlation at *wrong* offsets. A low score means
+"check it in the Sync view"; it's never applied silently.
+
+### Field processing: IVTC and deinterlacing
+
+IVTC runs ffmpeg's filters in-process through libavfilter:
+
+```
+fieldmatch (order=tff|bff) → bwdif (deint=interlaced) → decimate
+```
+
+`fieldmatch` and `decimate` are ffmpeg's ports of VIVTC's VFM and VDecimate, the same
+algorithms a VapourSynth IVTC script uses. `bwdif` only touches frames that are still combed after
+field matching. **Deinterlace** mode runs `bwdif` on every frame instead.
+
+libavfilter works on a stream, and decimation drops 1 frame in 5, so "output frame k" only has a
+meaning after the whole file has gone through the filters. Random access is built on top in two
+steps:
+
+1. **Analysis pass**, once per file, then cached. Every source frame goes through the chain tagged
+   with its index (`AVFrame.opaque`, which every filter carries over). For each output frame the
+   app records which source frame it came from and an xxh3 hash of its pixels.
+2. **Random access.** To fetch output frame k, the chain is rebuilt and fed from two 5-frame
+   cycles earlier, starting on a cycle boundary. The output's hash must match the analysis pass.
+   If it doesn't, the window grows, down to processing from frame 0. Every frame you get is
+   therefore verified identical to processing the whole file in order.
+
+IVTC output gets constant timestamps at 4/5 of the source rate, anchored per cycle. Telecined
+timestamps sit up to half a film frame early, which would make time alignment pick the
+neighbouring frame. IVTC is refused on sources already at 25 fps or less, since decimating
+would drop real frames.
+
+The tests run IVTC on 3:2-telecined copies of a known progressive clip. On a lossless copy every
+frame must match the original exactly. On lossy H.264 and DVD MPEG-2 copies, every output must
+be the right original frame.
+
+Analysis runs at ~150 fps for 1080i on an M-series Mac, so a 24-minute 1080i episode takes about
+5 minutes once.
+
+### Frame picking
+
+Picks are made on the reference timeline, and only from frames that exist in every source:
+
+- The usable range is split into N equal bins, with one random frame per bin, so picks spread
+  across the whole episode. The RNG (ChaCha8) is seeded, so the same seed gives the same frames.
+- Each candidate is judged on a small luma thumbnail. By default only black screens (mean luma
+  below 3%) and frames next to a scene cut or inside a fade are rejected, and a rejected candidate
+  is re-rolled up to 16 times in its bin. Near-duplicates (difference hash), flat frames and dark
+  scenes are opt-in. **B-frames only** checks the picture type ffms2 reports for an encode.
+- Black screens and scene changes are never used as fallbacks. If a bin has nothing else, the
+  pick moves to the largest gap between the other picks.
+- OP/ED can be left out using chapter names (`OP`, `Opening`, `オープニング`, …) or time ranges.
+
+### Screenshots: zimg
+
+[zimg](https://github.com/sekrit-twc/zimg), the library behind VapourSynth's `resize`,
+converts each frame to 8-bit RGB:
+
+- The matrix, range and chroma siting come from the stream. If the stream doesn't say, SD sizes
+  use BT.601 and everything else BT.709. Each source can override this.
+- Chroma is upsampled with Spline36. Sources deeper than 8 bits get error-diffusion dithering;
+  8-bit sources are only rounded.
+- Frames stay at their native resolution. The one exception is anamorphic sources, which are
+  widened to their display aspect ratio in the same pass (a 16:9 NTSC DVD becomes 853×480).
+  Black borders are cropped after that.
+
+PNGs are named `{frame}_{label}.png`, the layout slow.pics' batch upload expects, and an offline
+`index.html` viewer is written next to them.
+
+## SlopComp and VapourSynth
+
+Most people making comparisons today write a [VapourSynth](https://www.vapoursynth.com) script:
+load the sources with `ffms2.Source` or `lsmas.LWLibavSource`, trim and IVTC them, and then save
+frames or upload them with a comparison helper. The one that came up while building SlopComp is
+[vs-preview](https://github.com/Jaded-Encoding-Thaumaturgy/vs-preview)'s comparison tool, which
+picks frames, saves them and uploads to slow.pics. SlopComp's planned slow.pics client was based
+on its upload flow.
+
+SlopComp uses the same building blocks: ffms2 for decoding, zimg for colour conversion, and the
+VFM/VDecimate algorithms for IVTC. What's different is what's around them.
+
+| | VapourSynth script | SlopComp |
+| --- | --- | --- |
+| **Setup** | VapourSynth, Python, source and IVTC plugins, a previewer, and a script | One download, nothing else to install |
+| **Alignment** | `Trim` by frame number, offsets found by eye | By timestamp (VFR and CFR line up), with suggested offsets, a confidence score and drift checks |
+| **Frame picking** | Whatever the script does, often random or hand-picked | Spread across the episode and seeded. Black screens and scene changes are skipped. B-frames only and OP/ED exclusion are optional |
+| **IVTC** | VIVTC with every option, per-frame overrides, Wobbly for hybrid or VFR content | VFM/VDecimate defaults, a fixed 5-frame cycle, 8-bit only, no overrides |
+| **Other filters** | Anything: descale, debanding, your own encode chain | None. Sources are shown as they are, apart from IVTC, crop and anamorphic stretch |
+| **Whole seasons** | Usually one script per episode | Folders are paired by episode number, one comparison per episode |
+| **Fixing shots** | Edit the script and run it again | Nudge or replace a frame in the viewer, and only those PNGs are redone |
+
+If you need filtering beyond IVTC, such as comparing your own encode chain or doing a descale
+test, a script is the better tool. SlopComp is for comparing releases as they are.
+
+### Why VapourSynth isn't bundled
+
+- **Plugins are loaded from files.** VapourSynth's core can be linked in and used through its C
+  API without Python. But VIVTC and the ffms2 source are plugins, which the core loads as shared
+  libraries at runtime. Linking them statically would mean patching the core to register them
+  in-process, and maintaining that fork. Otherwise every release would ship extra
+  `.dylib`/`.dll`/`.so` files on three platforms. On macOS each one is another file to get past
+  Gatekeeper without a Developer ID.
+- **It wouldn't change the result.** Decoding and colour conversion already use ffms2 and zimg
+  directly. ffmpeg's `fieldmatch`/`decimate` are ports of the VIVTC filters. Bundling VapourSynth
+  would mostly add a second copy of libraries the app already has.
+- **No scripts means no scripting runtime.** Without user scripts there's nothing for Python or
+  VSScript to do, and they're the heaviest part to ship.
+
+The cost of using libavfilter instead is random access: VapourSynth can compute any frame on
+demand, while libavfilter needs the analysis pass and hash-verified windows described
+[above](#field-processing-ivtc-and-deinterlacing).
 
 ## Command line
 
