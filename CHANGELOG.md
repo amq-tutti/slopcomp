@@ -10,6 +10,12 @@ its notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Some shots picked the previous frame in one source even with a 0 offset, when two releases
+  round their timestamps differently (a few ms apart). Frames now match through up to a quarter
+  of a frame of timestamp jitter.
+
 ## [0.1.1] - 2026-11-12
 
 ### Added

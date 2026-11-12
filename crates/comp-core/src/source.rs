@@ -450,7 +450,8 @@ impl VideoSource {
     }
 
     /// The frame on screen at time `t` (seconds, relative to the first frame): the last frame
-    /// whose timestamp is ≤ `t`, with 1 ms of tolerance for timestamp rounding. Returns `None`
+    /// whose timestamp is ≤ `t`, with a quarter of a frame of tolerance for timestamp rounding
+    /// (see [`frame_at_time`](fn@frame_at_time)). Returns `None`
     /// before the first frame or after the last frame's display interval.
     pub fn frame_at_time(&self, t: f64) -> Option<i32> {
         frame_at_time(&self.times, t)
@@ -513,19 +514,40 @@ fn frame_times(vs: *mut sys::FFMS_VideoSource, n: i32) -> (Vec<f64>, f64) {
 }
 
 /// See [`VideoSource::frame_at_time`].
+///
+/// Container timestamps are rounded (Matroska usually to 1 ms), and two releases of the same
+/// video are often rounded differently: the same frame can be 2 ms apart between them. So a frame
+/// that starts *just* after `t`, within a quarter of its own frame duration, counts as the frame on
+/// screen. The tolerance follows the local frame duration, so VFR sections are handled too.
 pub fn frame_at_time(times: &[f64], t: f64) -> Option<i32> {
-    const EPS: f64 = 0.001;
+    const SLACK: f64 = 0.25;
     let n = times.len();
-    if n == 0 || t < -EPS {
+    if n == 0 {
         return None;
     }
-    // Typical frame duration, used to bound the last frame's display interval.
-    let last_dur = if n >= 2 { times[n - 1] - times[n - 2] } else { 0.05 };
-    if t > times[n - 1] + last_dur - EPS {
+    // Duration of the frame starting at `i` (the previous one's for the last frame).
+    let dur = |i: usize| -> f64 {
+        if n < 2 {
+            0.05
+        } else if i + 1 < n {
+            times[i + 1] - times[i]
+        } else {
+            times[n - 1] - times[n - 2]
+        }
+    };
+    // First frame starting after `t`.
+    let next = times.partition_point(|&x| x <= t);
+    if next < n && times[next] - t <= SLACK * dur(next.saturating_sub(1)) {
+        return Some(next as i32);
+    }
+    if next == 0 {
         return None;
     }
-    let idx = times.partition_point(|&x| x <= t + EPS);
-    Some(idx.saturating_sub(1) as i32)
+    let last = n - 1;
+    if next == n && t >= times[last] + dur(last) * (1.0 - SLACK) {
+        return None;
+    }
+    Some((next - 1) as i32)
 }
 
 fn color_of(f: &sys::FFMS_Frame) -> ColorInfo {
@@ -553,11 +575,28 @@ mod tests {
         // 3 frames at 24 fps, then 2 at 30 fps.
         let t = [0.0, 1.0 / 24.0, 2.0 / 24.0, 3.0 / 24.0, 3.0 / 24.0 + 1.0 / 30.0];
         assert_eq!(frame_at_time(&t, 0.0), Some(0));
-        assert_eq!(frame_at_time(&t, 0.04), Some(0));
+        assert_eq!(frame_at_time(&t, 0.03), Some(0));
+        assert_eq!(frame_at_time(&t, 1.0 / 24.0 - 0.002), Some(1)); // 2 ms early still counts
         assert_eq!(frame_at_time(&t, 1.0 / 24.0 - 0.0005), Some(1)); // rounding tolerance
         assert_eq!(frame_at_time(&t, 0.13), Some(3));
         assert_eq!(frame_at_time(&t, 0.16), Some(4));
         assert_eq!(frame_at_time(&t, 0.5), None);
         assert_eq!(frame_at_time(&t, -0.1), None);
+    }
+
+    /// Two muxes of the same 23.976 fps video, timestamps rounded to 1 ms differently (the
+    /// second one 0–2 ms later), must map frame for frame. Before, a 2 ms difference or float
+    /// error at exactly 1 ms mapped to the previous frame.
+    #[test]
+    fn rounding_jitter_between_releases() {
+        let exact = |i: usize| i as f64 * 1001.0 / 24000.0;
+        let a: Vec<f64> = (0..40_000).map(|i| (exact(i) * 1000.0).round() / 1000.0).collect();
+        let b: Vec<f64> = (0..40_000).map(|i| ((exact(i) * 1000.0).floor() + (i % 3) as f64) / 1000.0).collect();
+        // Real case: frame 34484 at 1438.270 s in one release and 1438.272 s in the other.
+        assert_eq!(frame_at_time(&[1438.229, 1438.272], 1438.270), Some(1));
+        for (i, &t) in a.iter().enumerate() {
+            assert_eq!(frame_at_time(&b, t), Some(i as i32), "frame {i}");
+            assert_eq!(frame_at_time(&a, b[i]), Some(i as i32), "frame {i} (reverse)");
+        }
     }
 }
