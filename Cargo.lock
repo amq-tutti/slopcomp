@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "comp-cli"
-version = "0.1.2-dev"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "comp-core"
-version = "0.1.2-dev"
+version = "0.1.2"
 dependencies = [
  "comp-sys",
  "md-5",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "comp-gui"
-version = "0.1.2-dev"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "comp-core",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "comp-sys"
-version = "0.1.2-dev"
+version = "0.1.2"
 dependencies = [
  "bindgen",
 ]

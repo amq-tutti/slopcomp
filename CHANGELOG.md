@@ -10,6 +10,8 @@ its notes.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-12
+
 ### Added
 
 - Frame types can be limited per source: tick I, P and/or B for each source in Settings
@@ -105,6 +107,7 @@ First public release.
 - For telecined sources (IVTC), the automatic offset suggestion can occasionally be a couple of
   frames off while still reporting high confidence. Check the Sync previews before applying it.
 
-[Unreleased]: https://github.com/amq-tutti/slopcomp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/amq-tutti/slopcomp/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/amq-tutti/slopcomp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/amq-tutti/slopcomp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/amq-tutti/slopcomp/releases/tag/v0.1.0
