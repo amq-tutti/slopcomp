@@ -76,7 +76,7 @@ First public release.
   executable and run it. The `comp` command-line tool alone is in the `.tar.gz`.
 - **Windows** (x64): unzip `SlopComp-0.1.0-windows-x64.zip` and run `SlopComp.exe`. This
   is the first Windows build, so please report anything that goes wrong.
-- `SHA256SUMS.txt` has the checksums of every download.
+- The Releases page shows each download's SHA-256 checksum next to it.
 
 ### Known issues
 

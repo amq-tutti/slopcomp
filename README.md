@@ -49,7 +49,7 @@ Get the latest version from the [**Releases page**](https://github.com/amq-tutti
 | **Windows** (x64) | `SlopComp-<version>-windows-x64.zip` | Unzip and run `SlopComp.exe`. |
 
 Everything is statically linked (ffmpeg, ffms2, zimg, dav1d), so there's nothing else to install.
-`SHA256SUMS.txt` on each release lists the checksums.
+The Releases page shows each download's SHA-256 checksum next to it.
 
 ## How it works
 
@@ -163,7 +163,7 @@ Note each user-visible change under **Unreleased** in [CHANGELOG.md](CHANGELOG.m
 packaging/release.sh 0.2.0
 ```
 
-It moves the Unreleased notes under the new version, sets the version in `Cargo.toml`, shows the notes and asks before it commits, tags `v0.2.0` and pushes. The tag runs `.github/workflows/release.yml`: all three platforms are built and a **draft** GitHub release is created with the changelog notes, the downloads and SHA256SUMS. Check it on the repo's Releases page and publish it. Versions with a suffix (`0.2.0-beta.1`) are marked as pre-releases.
+It moves the Unreleased notes under the new version, sets the version in `Cargo.toml`, shows the notes and asks before it commits, tags `v0.2.0` and pushes. The tag runs `.github/workflows/release.yml`: all three platforms are built and a **draft** GitHub release is created with the changelog notes and the downloads. Check it on the repo's Releases page and publish it. Versions with a suffix (`0.2.0-beta.1`) are marked as pre-releases.
 
 The workflow can also be started from the Actions tab without a tag, to test the builds; that run doesn't create a release. macOS builds are ad-hoc signed unless the Developer ID secrets listed in the workflow are set.
 

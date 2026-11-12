@@ -127,8 +127,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums
-        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Release notes from CHANGELOG.md
         run: packaging/changelog-notes.sh "${GITHUB_REF_NAME}" > "$RUNNER_TEMP/notes.md"
       - uses: softprops/action-gh-release@v2
